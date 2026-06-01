@@ -59,6 +59,21 @@ String getPortalHtml() {
   return html;
 }
 
+// ---- WiFi 状态可读转换 ----
+
+const char* wifiStatusToString(wl_status_t status) {
+  switch (status) {
+    case WL_IDLE_STATUS:      return "WL_IDLE_STATUS (0)";
+    case WL_NO_SSID_AVAIL:    return "WL_NO_SSID_AVAIL (1)";
+    case WL_SCAN_COMPLETED:   return "WL_SCAN_COMPLETED (2)";
+    case WL_CONNECTED:        return "WL_CONNECTED (3)";
+    case WL_CONNECT_FAILED:   return "WL_CONNECT_FAILED (4)";
+    case WL_CONNECTION_LOST:  return "WL_CONNECTION_LOST (5)";
+    case WL_DISCONNECTED:     return "WL_DISCONNECTED (6)";
+    default:                  return "UNKNOWN";
+  }
+}
+
 // ---- WiFi 连接 ----
 
 bool connectWiFi(const String& ssid, const String& password, unsigned long timeoutMs) {
@@ -193,9 +208,20 @@ void startAPPortal() {
 void startParallelProvision() {
   provisioningMode = true;
 
-  // SmartConfig 优先：纯 STA 模式（ESP8266 只能 STA 模式启动 SmartConfig）
+  // ---- SmartConfig 启动前：状态检查 + 清理 ----
+  DEBUG_SERIAL.println("\n[PROV] === SmartConfig 启动前状态检查 ===");
+  DEBUG_SERIAL.println("[PROV] MAC: " + WiFi.macAddress());
+  DEBUG_SERIAL.println("[PROV] 当前模式 (getMode): " + String(WiFi.getMode()));
+  DEBUG_SERIAL.println("[PROV] 当前状态 (status): " + String(wifiStatusToString(WiFi.status())));
+
+  // 确保纯 STA 模式，先断开所有连接（ESP8266 只能 STA 模式启动 SmartConfig）
   WiFi.mode(WIFI_STA);
-  delay(300);
+  WiFi.disconnect(true);
+  delay(500);
+
+  DEBUG_SERIAL.println("[PROV] 清理后模式: " + String(WiFi.getMode()));
+  DEBUG_SERIAL.println("[PROV] 清理后状态: " + String(wifiStatusToString(WiFi.status())));
+  DEBUG_SERIAL.println("[PROV] =======================================");
 
   bool scOk = WiFi.beginSmartConfig();
   smartConfigActive = scOk;
@@ -203,10 +229,12 @@ void startParallelProvision() {
   smartConfigStartMs = millis();
 
   if (scOk) {
-    DEBUG_SERIAL.println("[PROV] SmartConfig listening (AirKiss, " + String(smartConfigTimeout / 1000) + "s timeout)");
+    DEBUG_SERIAL.println("[PROV] SmartConfig 已启动 (AirKiss, " + String(smartConfigTimeout / 1000) + "s timeout)");
+    DEBUG_SERIAL.println("[PROV] 等待手机发送 Wi-Fi 凭据...");
+    // SmartConfig 等待期间不启动 AP 模式，避免干扰 STA 连接
     ensureProvisionRoutes();
   } else {
-    DEBUG_SERIAL.println("[PROV] SmartConfig failed, falling back to AP portal");
+    DEBUG_SERIAL.println("[PROV] SmartConfig 启动失败，切换到 AP 配网");
     startAPPortal();
   }
 }
@@ -216,18 +244,61 @@ void handleProvisioningLoop() {
     if (!smartConfigDoneHandled) {
       if (WiFi.smartConfigDone()) {
         smartConfigDoneHandled = true;
-        DEBUG_SERIAL.println("[PROV] SmartConfig received credentials, connecting...");
 
+        String rcvdSSID = WiFi.SSID();
+        String rcvdPsk = WiFi.psk();
+        int pwdLen = rcvdPsk.length();
+
+        DEBUG_SERIAL.println("");
+        DEBUG_SERIAL.println("[PROV] ========== SmartConfig 收到凭据 ==========");
+        DEBUG_SERIAL.println("[PROV] SSID: " + rcvdSSID);
+        DEBUG_SERIAL.println("[PROV] 密码长度: " + String(pwdLen) + " 字符");
+        DEBUG_SERIAL.println("[PROV] 当前 WiFi 模式: " + String(WiFi.getMode()));
+        DEBUG_SERIAL.println("[PROV] 当前 WiFi 状态: " + String(wifiStatusToString(WiFi.status())));
+        DEBUG_SERIAL.println("[PROV] MAC: " + WiFi.macAddress());
+        DEBUG_SERIAL.println("[PROV] 开始连接等待 (最长 45 秒)...");
+        DEBUG_SERIAL.println("[PROV] ===========================================");
+
+        // SmartConfig 结束后确保 STA 模式
+        WiFi.mode(WIFI_STA);
+
+        const unsigned long SC_CONNECT_TIMEOUT = 45000;
         unsigned long connectStart = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - connectStart < 20000) {
+        wl_status_t lastStatus = WiFi.status();
+        unsigned long lastStatusLog = 0;
+
+        while (WiFi.status() != WL_CONNECTED && millis() - connectStart < SC_CONNECT_TIMEOUT) {
+          wl_status_t currentStatus = WiFi.status();
+          unsigned long elapsedSec = (millis() - connectStart) / 1000;
+
+          // 每秒打印一次状态
+          if (millis() - lastStatusLog >= 1000) {
+            DEBUG_SERIAL.println("[PROV] [" + String(elapsedSec) + "s] 状态: " +
+                                 String(wifiStatusToString(currentStatus)));
+            lastStatusLog = millis();
+          }
+
+          // 检测状态变化并记录
+          if (currentStatus != lastStatus) {
+            DEBUG_SERIAL.println("[PROV] >>> 状态变化: " + String(wifiStatusToString(lastStatus)) +
+                                 " -> " + String(wifiStatusToString(currentStatus)) +
+                                 " (耗时 " + String(elapsedSec) + "s)");
+            lastStatus = currentStatus;
+          }
+
           delay(100);
           yield();
         }
 
+        unsigned long totalElapsed = (millis() - connectStart) / 1000;
+
         if (WiFi.status() == WL_CONNECTED) {
+          DEBUG_SERIAL.println("[PROV] SmartConfig 连接成功! IP: " + WiFi.localIP().toString() +
+                               " (耗时 " + String(totalElapsed) + "s)");
+
           DeviceConfig newCfg;
-          newCfg.ssid = WiFi.SSID();
-          newCfg.password = WiFi.psk();
+          newCfg.ssid = rcvdSSID;
+          newCfg.password = rcvdPsk;
           newCfg.serverHost = cfg.serverHost;
           newCfg.httpPort = cfg.httpPort;
           newCfg.wsPort = cfg.wsPort;
@@ -235,26 +306,77 @@ void handleProvisioningLoop() {
           cfg = newCfg;
           saveConfig(cfg);
 
-          DEBUG_SERIAL.println("[PROV] SmartConfig config saved, restarting...");
+          DEBUG_SERIAL.println("[PROV] 配置已保存，即将重启...");
           WiFi.stopSmartConfig();
           smartConfigActive = false;
           delay(500);
           ESP.restart();
         } else {
-          DEBUG_SERIAL.println("[PROV] SmartConfig connect failed, falling back to AP portal");
+          // ---- 连接失败，详细诊断 ----
+          wl_status_t finalStatus = WiFi.status();
+          DEBUG_SERIAL.println("");
+          DEBUG_SERIAL.println("[PROV] ========== SmartConfig 连接失败 ==========");
+          DEBUG_SERIAL.println("[PROV] 最终状态: " + String(wifiStatusToString(finalStatus)));
+          DEBUG_SERIAL.println("[PROV] 总耗时: " + String(totalElapsed) + "s");
+          DEBUG_SERIAL.println("[PROV] SSID: " + rcvdSSID);
+          DEBUG_SERIAL.println("[PROV] 密码长度: " + String(pwdLen));
+          DEBUG_SERIAL.println("[PROV] WiFi 模式: " + String(WiFi.getMode()));
+          DEBUG_SERIAL.println("[PROV] MAC: " + WiFi.macAddress());
+
+          // 根据最终状态给出诊断建议
+          switch (finalStatus) {
+            case WL_NO_SSID_AVAIL:
+              DEBUG_SERIAL.println("[PROV] 诊断: SSID 不可用");
+              DEBUG_SERIAL.println("[PROV]   - 热点可能不是 2.4GHz（ESP8266 不支持 5GHz）");
+              DEBUG_SERIAL.println("[PROV]   - SSID 可能不存在或已关闭");
+              DEBUG_SERIAL.println("[PROV]   - 手机热点可能不可见/未开启");
+              DEBUG_SERIAL.println("[PROV]   - 隐藏 SSID 可能不被 SmartConfig 支持");
+              break;
+            case WL_CONNECT_FAILED:
+              DEBUG_SERIAL.println("[PROV] 诊断: 连接失败(认证/关联失败)");
+              DEBUG_SERIAL.println("[PROV]   - 密码可能错误");
+              DEBUG_SERIAL.println("[PROV]   - 加密方式不兼容（ESP8266 支持 WPA/WPA2，不支持 WPA3）");
+              DEBUG_SERIAL.println("[PROV]   - 热点可能使用 WPA3 或 WPA2/WPA3 混合加密");
+              DEBUG_SERIAL.println("[PROV]   - 热点可能设置了 MAC 地址过滤");
+              break;
+            case WL_DISCONNECTED:
+              DEBUG_SERIAL.println("[PROV] 诊断: 已断开连接");
+              DEBUG_SERIAL.println("[PROV]   - 可能认证失败（密码错误）");
+              DEBUG_SERIAL.println("[PROV]   - 热点可能拒绝连接");
+              DEBUG_SERIAL.println("[PROV]   - 信号可能太弱");
+              DEBUG_SERIAL.println("[PROV]   - 热点可能限制了连接设备数");
+              break;
+            case WL_IDLE_STATUS:
+              DEBUG_SERIAL.println("[PROV] 诊断: 空闲状态(连接未开始或已超时)");
+              DEBUG_SERIAL.println("[PROV]   - 热点兼容性问题或连接等待不足");
+              DEBUG_SERIAL.println("[PROV]   - 热点可能繁忙或响应慢");
+              break;
+            default:
+              DEBUG_SERIAL.println("[PROV] 诊断: 未知失败原因");
+              DEBUG_SERIAL.println("[PROV]   - 请检查热点设置和兼容性");
+              break;
+          }
+          DEBUG_SERIAL.println("[PROV] =============================================");
+          DEBUG_SERIAL.println("");
+
+          DEBUG_SERIAL.println("[PROV] 切换到 AP 配网模式...");
           startAPPortal();
         }
         return;
       }
 
+      // SmartConfig 等待中，定期日志
       static unsigned long lastScLog = 0;
       if (millis() - lastScLog > 15000) {
         lastScLog = millis();
-        DEBUG_SERIAL.println("[PROV] SmartConfig still waiting...");
+        unsigned long waitedSec = (millis() - smartConfigStartMs) / 1000;
+        DEBUG_SERIAL.println("[PROV] SmartConfig 等待中... (已等待 " + String(waitedSec) + "s/" +
+                             String(smartConfigTimeout / 1000) + "s)");
       }
 
       if (millis() - smartConfigStartMs > smartConfigTimeout) {
-        DEBUG_SERIAL.println("[PROV] SmartConfig timeout, falling back to AP portal");
+        DEBUG_SERIAL.println("[PROV] SmartConfig 超时 (" + String(smartConfigTimeout / 1000) +
+                             "s)，切换到 AP 配网");
         startAPPortal();
       }
     }

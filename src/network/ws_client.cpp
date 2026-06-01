@@ -175,21 +175,21 @@ void handleWsMessage(const String& text) {
     if (payload.containsKey("pan")) {
       panDeg = payload["pan"].as<int>();
       panDeg = constrain(panDeg, PAN_MIN, PAN_MAX);
-      sendNano('p', String(panDeg, 2));
+      sendNano('p', String((float)panDeg, 2));
       changed = true;
     }
 
     if (payload.containsKey("tilt")) {
       tiltDeg = payload["tilt"].as<int>();
       tiltDeg = constrain(tiltDeg, TILT_MIN, TILT_MAX);
-      sendNano('t', String(tiltDeg, 2));
+      sendNano('t', String((float)tiltDeg, 2));
       changed = true;
     }
 
     if (payload.containsKey("slider")) {
       sliderMm = payload["slider"].as<int>();
       sliderMm = constrain(sliderMm, SLIDER_MIN, SLIDER_MAX);
-      sendNano('x', String(sliderMm, 2));
+      sendNano('x', String((float)sliderMm, 2));
       changed = true;
     }
 

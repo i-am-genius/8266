@@ -1,9 +1,9 @@
 #include "device/arm_controller.h"
 
-// 当前速度档位
+// Current speed preset.
 String currentArmSpeed = "normal";
 
-// 摇杆连续运动状态
+// Continuous joystick motion state.
 bool armJoystickActive = false;
 float joystickX = 0.0f;
 float joystickY = 0.0f;
@@ -12,6 +12,16 @@ float tiltVelocityDegPerSec = 0.0f;
 unsigned long joystickExpireAt = 0;
 unsigned long lastArmMotionUpdateAt = 0;
 unsigned long lastNanoPositionSendAt = 0;
+
+// Preserve fractional motion so small joystick deltas are not lost.
+static float panRemainder = 0.0f;
+static float tiltRemainder = 0.0f;
+static int lastJoystickSentPanDeg = 10000;
+static int lastJoystickSentTiltDeg = 10000;
+
+String formatDeg(int value) {
+  return String((float)value, 2);
+}
 
 void sendNano(char cmd, const String& value) {
   nanoSerial.print(cmd);
@@ -54,13 +64,13 @@ void pollNano() {
 void sendPanTilt() {
   panDeg = constrain(panDeg, PAN_MIN, PAN_MAX);
   tiltDeg = constrain(tiltDeg, TILT_MIN, TILT_MAX);
-  sendNano('p', String(panDeg, 2));
-  sendNano('t', String(tiltDeg, 2));
+  sendNano('p', formatDeg(panDeg));
+  sendNano('t', formatDeg(tiltDeg));
 }
 
 void sendSlider() {
   sliderMm = constrain(sliderMm, SLIDER_MIN, SLIDER_MAX);
-  sendNano('x', String(sliderMm, 2));
+  sendNano('x', String((float)sliderMm, 2));
 }
 
 void applyArmSpeed(const String& speed) {
@@ -91,9 +101,9 @@ void applyArmSpeed(const String& speed) {
 
   currentArmSpeed = normalized;
 
-  sendNano('s', String(panSpeedDeg, 2));
-  sendNano('S', String(tiltSpeedDeg, 2));
-  sendNano('X', String(sliderSpeedMm, 2));
+  sendNano('s', String((float)panSpeedDeg, 2));
+  sendNano('S', String((float)tiltSpeedDeg, 2));
+  sendNano('X', String((float)sliderSpeedMm, 2));
 }
 
 void getArmJoystickMaxSpeed(float& maxPanSpeed, float& maxTiltSpeed) {
@@ -124,6 +134,8 @@ void setArmJoystickMotion(float x, float y, int durationMs) {
 
   panVelocityDegPerSec = joystickX * maxPanSpeed;
   tiltVelocityDegPerSec = joystickY * maxTiltSpeed;
+  lastJoystickSentPanDeg = panDeg;
+  lastJoystickSentTiltDeg = tiltDeg;
 
   armJoystickActive = true;
   joystickExpireAt = millis() + durationMs;
@@ -145,6 +157,10 @@ void stopArmJoystickMotion() {
   joystickY = 0.0f;
   panVelocityDegPerSec = 0.0f;
   tiltVelocityDegPerSec = 0.0f;
+  panRemainder = 0.0f;
+  tiltRemainder = 0.0f;
+  lastJoystickSentPanDeg = panDeg;
+  lastJoystickSentTiltDeg = tiltDeg;
 
   DEBUG_SERIAL.println("[ARM] joystick stopped");
 }
@@ -156,7 +172,7 @@ void updateArmJoystickMotion() {
 
   unsigned long now = millis();
 
-  // 超时自动停止（前端断连/stop 丢包保护）
+  // Joystick packets act as a heartbeat; stop if updates stop arriving.
   if ((long)(now - joystickExpireAt) >= 0) {
     stopArmJoystickMotion();
     DEBUG_SERIAL.println("[ARM] joystick expired, auto stop");
@@ -171,22 +187,46 @@ void updateArmJoystickMotion() {
   float dt = (now - lastArmMotionUpdateAt) / 1000.0f;
   lastArmMotionUpdateAt = now;
 
-  // 防止帧间隔过大导致位置跳变
+  // Ignore abnormal frame gaps to avoid a sudden position jump.
   if (dt <= 0.0f || dt > 0.2f) {
     return;
   }
 
-  panDeg += (int)(panVelocityDegPerSec * dt);
-  tiltDeg += (int)(tiltVelocityDegPerSec * dt);
+  // Preserve fractional motion so small deltas eventually become whole steps.
+  float panDelta = panVelocityDegPerSec * dt + panRemainder;
+  float tiltDelta = tiltVelocityDegPerSec * dt + tiltRemainder;
+
+  int panStep = (int)panDelta;
+  int tiltStep = (int)tiltDelta;
+
+  panRemainder = panDelta - panStep;
+  tiltRemainder = tiltDelta - tiltStep;
+
+  panDeg += panStep;
+  tiltDeg += tiltStep;
 
   panDeg = constrain(panDeg, PAN_MIN, PAN_MAX);
   tiltDeg = constrain(tiltDeg, TILT_MIN, TILT_MAX);
 
-  // 每 80ms 向 Nano 发送一次当前位置
+  // Send the current position to Nano at a fixed cadence.
   if (now - lastNanoPositionSendAt >= 80) {
-    sendNano('p', String(panDeg, 2));
-    sendNano('t', String(tiltDeg, 2));
-    lastNanoPositionSendAt = now;
+    bool sent = false;
+
+    if (panDeg != lastJoystickSentPanDeg) {
+      sendNano('p', formatDeg(panDeg));
+      lastJoystickSentPanDeg = panDeg;
+      sent = true;
+    }
+
+    if (tiltDeg != lastJoystickSentTiltDeg) {
+      sendNano('t', formatDeg(tiltDeg));
+      lastJoystickSentTiltDeg = tiltDeg;
+      sent = true;
+    }
+
+    if (sent) {
+      lastNanoPositionSendAt = now;
+    }
   }
 }
 
@@ -203,19 +243,19 @@ void handleArmAction(const String& action) {
   if (normalizedAction == "up") {
     tiltDeg += angleStep;
     tiltDeg = constrain(tiltDeg, TILT_MIN, TILT_MAX);
-    sendNano('t', String(tiltDeg, 2));
+    sendNano('t', formatDeg(tiltDeg));
   } else if (normalizedAction == "down") {
     tiltDeg -= angleStep;
     tiltDeg = constrain(tiltDeg, TILT_MIN, TILT_MAX);
-    sendNano('t', String(tiltDeg, 2));
+    sendNano('t', formatDeg(tiltDeg));
   } else if (normalizedAction == "left") {
     panDeg -= angleStep;
     panDeg = constrain(panDeg, PAN_MIN, PAN_MAX);
-    sendNano('p', String(panDeg, 2));
+    sendNano('p', formatDeg(panDeg));
   } else if (normalizedAction == "right") {
     panDeg += angleStep;
     panDeg = constrain(panDeg, PAN_MIN, PAN_MAX);
-    sendNano('p', String(panDeg, 2));
+    sendNano('p', formatDeg(panDeg));
   } else if (normalizedAction == "center") {
     panDeg = 0;
     tiltDeg = 0;

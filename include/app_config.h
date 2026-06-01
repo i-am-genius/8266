@@ -51,6 +51,9 @@ const uint16_t DEFAULT_WS_PORT   = 80;
 const char* const DEFAULT_WIFI_SSID = "NaHS";
 const char* const DEFAULT_WIFI_PASSWORD = "123456789";
 
+// const char* const DEFAULT_WIFI_SSID = "somebody的iPhone";
+// const char* const DEFAULT_WIFI_PASSWORD = "20040000";
+
 // ===================== 定时参数 =====================
 const unsigned long lightSendInterval    = 30000;
 const unsigned long lightUpdateInterval  = 50;
