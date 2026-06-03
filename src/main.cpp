@@ -1,4 +1,4 @@
-#include "app_config.h"
+﻿#include "app_config.h"
 #include "config/config_manager.h"
 #include "network/wifi_manager.h"
 #include "network/http_reporter.h"
@@ -7,8 +7,13 @@
 #include "device/sensor_manager.h"
 #include "device/ota_manager.h"
 #include "device/arm_controller.h"
+#include "device/self_test.h"
 #include "server/local_server.h"
 #include "network/udp_discovery.h"
+
+// ==================== HTTP 烟雾测试 ====================
+// 启用后固件只做 WiFi + HTTP announce，排除其他所有模块干扰
+
 
 // ===================== 传感器 / 外设 实例 =====================
 BH1750 lightMeter;
@@ -20,6 +25,17 @@ WiFiUDP udp;
 // ===================== 运行状态 =====================
 bool bh1750Ready = false;
 bool tofReady = false;
+bool fsReady = false;
+bool wsConnected = false;
+bool selfTestDone = false;
+bool selfTestFsOk = false;
+bool selfTestWifiOk = false;
+bool selfTestWsOk = false;
+bool selfTestBh1750Ok = false;
+bool selfTestTofOk = false;
+bool selfTestNanoOk = false;
+unsigned long selfTestCheckedAtMs = 0;
+String selfTestNanoStatus = "not_run";
 bool enableBroadcast = true;
 bool enableAnnounce = true;
 bool provisioningMode = false;
@@ -40,6 +56,15 @@ unsigned long lastAnnounce = 0;
 unsigned long lastBroadcast = 0;
 unsigned long lastPing = 0;
 unsigned long lastToFRead = 0;
+
+bool pendingStateReport = false;
+bool pendingStateReportWithSelfTest = false;
+unsigned long lastStateReportFailedAt = 0;
+unsigned long lastWsConnectedMs = 0;
+bool bootOnlineReportRequested = false;
+bool bootOnlineReportDone = false;
+bool bootSelfTestStarted = false;
+bool bootSelfTestReportDone = false;
 
 IPAddress cachedBroadcastIP;
 bool broadcastIPCached = false;
@@ -96,6 +121,8 @@ void setup() {
 
   if (!LittleFS.begin()) {
     DEBUG_SERIAL.println("[FS] LittleFS 挂载失败");
+  } else {
+    fsReady = true;
   }
 
   setupHardwareAndSensors();
@@ -103,7 +130,6 @@ void setup() {
   // 初始化 Nano 云台：细分配置 + 默认速度
   sendNano('m', "16");
   applyArmSpeed("normal");
-
   bool hasConfig = loadConfig();
   bool wifiOk = false;
 
@@ -123,7 +149,6 @@ void setup() {
   setupDeviceHttpServer();
   beginWebSocketClient();
   sendAnnounce();
-  sendDeviceStateReport();
 }
 
 void loop() {
@@ -135,39 +160,30 @@ void loop() {
     return;
   }
 
-  if (otaInProgress) return;
-
   if (!ensureWiFiReady()) return;
 
   webSocket.loop();
+  handleWsHeartbeat();
+
+  if (otaInProgress) return;
 
   // 摇杆连续运动更新 (每帧)
   updateArmJoystickMotion();
+  handleSelfTestTask();
+  handleDeviceStateReportTask();
+  handleLocateBreathTask();
 
   broadcastDevice();
 
-  if (effectWaveEnabled) {
-    updateEffectLoop();
-  } else {
-    updateLightingByToF();
+  if (!isLocateBreathActive()) {
+    if (effectWaveEnabled) {
+      updateEffectLoop();
+    } else {
+      updateLightingByToF();
+    }
   }
 
   unsigned long now = millis();
-
-  if (now - lastPing > wsPingInterval) {
-    lastPing = now;
-
-    StaticJsonDocument<96> doc;
-    doc["type"] = "ping";
-    doc["id"] = deviceId;
-    doc["chipId"] = deviceId;
-
-    String pingMsg;
-    serializeJson(doc, pingMsg);
-    webSocket.sendTXT(pingMsg);
-
-    DEBUG_SERIAL.println("发送 WebSocket 心跳: " + pingMsg);
-  }
 
   if (now - lastAnnounce > announceInterval) {
     lastAnnounce = now;

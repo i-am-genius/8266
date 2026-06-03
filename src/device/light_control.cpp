@@ -1,5 +1,22 @@
 #include "device/light_control.h"
 
+enum LocateBreathState {
+  LOCATE_IDLE,
+  LOCATE_RUNNING,
+  LOCATE_RESTORE
+};
+
+static const int LOCATE_TEMP = 4500;
+static const unsigned long LOCATE_UPDATE_INTERVAL_MS = 30;
+
+static LocateBreathState locateState = LOCATE_IDLE;
+static int locateTimes = 0;
+static int locateCycleMs = 0;
+static int locateRestoreBrightness = 0;
+static int locateRestoreTemp = 0;
+static unsigned long locateStartedAt = 0;
+static unsigned long lastLocateUpdateAt = 0;
+
 void applyLightSettings(int br, int tp) {
   tp = constrain(tp, 2700, 6500);
 
@@ -19,40 +36,75 @@ void stopEffectWaveForManualControl() {
   DEBUG_SERIAL.println("[EFFECT] wave stopped by manual control");
 }
 
-void locateBreath(int times, int cycleMs) {
+void startLocateBreath(int times, int cycleMs) {
   times = constrain(times, 1, 8);
   cycleMs = constrain(cycleMs, 800, 3000);
 
-  int oldBrightness = autoMode ? recommendedBrightness : brightness;
-  int oldTemp = autoMode ? recommendedTemp : temp;
+  if (locateState == LOCATE_IDLE) {
+    locateRestoreBrightness = autoMode ? recommendedBrightness : brightness;
+    locateRestoreTemp = autoMode ? recommendedTemp : temp;
+  }
 
-  int locateTemp = 4500;
-  int stepDelay = cycleMs / LOCATE_STEPS;
+  locateTimes = times;
+  locateCycleMs = cycleMs;
+  locateStartedAt = millis();
+  lastLocateUpdateAt = 0;
+  locateState = LOCATE_RUNNING;
 
   DEBUG_SERIAL.printf(
     "[LOCATE] 呼吸灯开始 times=%d cycleMs=%d restoreB=%d restoreT=%d\n",
-    times, cycleMs, oldBrightness, oldTemp
+    locateTimes, locateCycleMs, locateRestoreBrightness, locateRestoreTemp
   );
+}
 
-  for (int round = 0; round < times; round++) {
-    for (int i = 0; i <= LOCATE_STEPS; i++) {
-      float phase = (float)i / (float)LOCATE_STEPS * PI;
-
-      int br = LOCATE_MIN_BRIGHTNESS + int(sin(phase) * (LOCATE_MAX_BRIGHTNESS - LOCATE_MIN_BRIGHTNESS));
-
-      applyLightSettings(br, locateTemp);
-
-      delay(stepDelay);
-      yield();
-
-      webSocket.loop();
-      server.handleClient();
-    }
+void stopLocateBreath(bool restoreLight) {
+  if (locateState == LOCATE_IDLE) {
+    return;
   }
 
-  applyLightSettings(oldBrightness, oldTemp);
+  if (restoreLight) {
+    applyLightSettings(locateRestoreBrightness, locateRestoreTemp);
+    lastLightUpdate = millis();
+  }
+  locateState = LOCATE_IDLE;
+}
 
-  DEBUG_SERIAL.println("[LOCATE] 呼吸定位结束，已恢复原灯光");
+bool isLocateBreathActive() {
+  return locateState != LOCATE_IDLE;
+}
+
+void handleLocateBreathTask() {
+  if (locateState == LOCATE_IDLE) {
+    return;
+  }
+
+  if (locateState == LOCATE_RESTORE) {
+    applyLightSettings(locateRestoreBrightness, locateRestoreTemp);
+    lastLightUpdate = millis();
+    locateState = LOCATE_IDLE;
+    DEBUG_SERIAL.println("[LOCATE] 呼吸定位结束，已恢复原灯光");
+    return;
+  }
+
+  unsigned long now = millis();
+  unsigned long totalMs = (unsigned long)locateTimes * (unsigned long)locateCycleMs;
+  unsigned long elapsed = now - locateStartedAt;
+
+  if (elapsed >= totalMs) {
+    locateState = LOCATE_RESTORE;
+    return;
+  }
+
+  if (lastLocateUpdateAt != 0 && now - lastLocateUpdateAt < LOCATE_UPDATE_INTERVAL_MS) {
+    return;
+  }
+  lastLocateUpdateAt = now;
+
+  unsigned long cycleElapsed = elapsed % (unsigned long)locateCycleMs;
+  float phase = (float)cycleElapsed / (float)locateCycleMs * PI;
+  int br = LOCATE_MIN_BRIGHTNESS + int(sin(phase) * (LOCATE_MAX_BRIGHTNESS - LOCATE_MIN_BRIGHTNESS));
+  applyLightSettings(br, LOCATE_TEMP);
+  lastLightUpdate = now;
 }
 
 void updateEffectLoop() {

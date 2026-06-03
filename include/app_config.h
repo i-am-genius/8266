@@ -1,6 +1,6 @@
 #pragma once
 
-// ===================== 系统 Includes =====================
+// ===================== 绯荤粺 Includes =====================
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <WiFiUdp.h>
@@ -13,26 +13,27 @@
 #include <Adafruit_VL53L0X.h>
 #include <BH1750.h>
 
-// ===================== 串口别名 =====================
-// Serial(GPIO1/GPIO3) 专门用于和 Nano 通信（全双工）
-// Serial1(GPIO2) 专门用于调试输出（仅发送）
+// ===================== Serial aliases =====================
+// Serial(GPIO1/GPIO3) talks to Nano.
+// Serial1(GPIO2) is debug output only.
 #define nanoSerial Serial
 #define DEBUG_SERIAL Serial1
+#define LOG_WS_HEARTBEAT 0
 
-// ===================== 引脚定义 =====================
+// ===================== 寮曡剼瀹氫箟 =====================
 #define LED_COLD_PIN D2
 #define LED_WARM_PIN D1
 #define BLUR         D7
 #define TOF_SDA_PIN  D5
 #define TOF_SCL_PIN  D6
 
-// ===================== 固件信息 =====================
+// ===================== 鍥轰欢淇℃伅 =====================
 #define FW_DEVICE_TYPE  "lamp"
 #define FW_VERSION      "1.0.4"
 #define FW_VERSION_CODE 10004
 #define FW_CHANNEL      "stable"
 
-// ===================== 命名常量 =====================
+// ===================== 鍛藉悕甯搁噺 =====================
 const float   WAVE_FREQ_FACTOR          = 0.32f;
 const float   TOF_TRANSITION_MS         = 2000.0f;
 const uint16_t TOF_MAX_RANGE_MM         = 8200;
@@ -44,17 +45,14 @@ const int     LOCATE_MIN_BRIGHTNESS     = 5;
 const int     LOCATE_MAX_BRIGHTNESS     = 100;
 const int     LOCATE_STEPS              = 36;
 
-// ===================== 默认服务器配置 =====================
+// ===================== 榛樿鏈嶅姟鍣ㄩ厤缃?=====================
 const char* const DEFAULT_SERVER_HOST = "device.genius.show";
 const uint16_t DEFAULT_HTTP_PORT = 80;
 const uint16_t DEFAULT_WS_PORT   = 80;
-const char* const DEFAULT_WIFI_SSID = "NaHS";
-const char* const DEFAULT_WIFI_PASSWORD = "123456789";
+const char* const DEFAULT_WIFI_SSID = "";
+const char* const DEFAULT_WIFI_PASSWORD = "";
 
-// const char* const DEFAULT_WIFI_SSID = "somebody的iPhone";
-// const char* const DEFAULT_WIFI_PASSWORD = "20040000";
-
-// ===================== 定时参数 =====================
+// ===================== 瀹氭椂鍙傛暟 =====================
 const unsigned long lightSendInterval    = 30000;
 const unsigned long lightUpdateInterval  = 50;
 const unsigned long wifiConnectTimeout   = 15000;
@@ -63,6 +61,7 @@ const unsigned long smartConfigTimeout   = 30000;
 const unsigned long announceInterval     = 5000;
 const unsigned long broadcastInterval    = 5000;
 const unsigned long wsPingInterval       = 5000;
+const unsigned long stateReportBackoffMs = 30000;
 const unsigned long otaProgressReportMinIntervalMs = 3000;
 const int           otaProgressReportMinStep       = 5;
 
@@ -78,16 +77,27 @@ struct DeviceConfig {
   uint16_t wsPort;
 };
 
-// ===================== 传感器 / 外设 (extern) =====================
+// ===================== 浼犳劅鍣?/ 澶栬 (extern) =====================
 extern BH1750 lightMeter;
 extern Adafruit_VL53L0X lox;
 extern WebSocketsClient webSocket;
 extern ESP8266WebServer server;
 extern WiFiUDP udp;
 
-// ===================== 运行状态 (extern) =====================
+// ===================== 杩愯鐘舵€?(extern) =====================
 extern bool bh1750Ready;
 extern bool tofReady;
+extern bool fsReady;
+extern bool wsConnected;
+extern bool selfTestDone;
+extern bool selfTestFsOk;
+extern bool selfTestWifiOk;
+extern bool selfTestWsOk;
+extern bool selfTestBh1750Ok;
+extern bool selfTestTofOk;
+extern bool selfTestNanoOk;
+extern unsigned long selfTestCheckedAtMs;
+extern String selfTestNanoStatus;
 extern bool enableBroadcast;
 extern bool enableAnnounce;
 extern bool provisioningMode;
@@ -112,7 +122,16 @@ extern unsigned long lastToFRead;
 extern IPAddress cachedBroadcastIP;
 extern bool broadcastIPCached;
 
-// ===================== 灯光控制参数 (extern) =====================
+extern bool pendingStateReport;
+extern bool pendingStateReportWithSelfTest;
+extern unsigned long lastStateReportFailedAt;
+extern unsigned long lastWsConnectedMs;
+extern bool bootOnlineReportRequested;
+extern bool bootOnlineReportDone;
+extern bool bootSelfTestStarted;
+extern bool bootSelfTestReportDone;
+
+// ===================== 鐏厜鎺у埗鍙傛暟 (extern) =====================
 extern int brightness;
 extern int temp;
 extern bool autoMode;
@@ -134,7 +153,7 @@ extern unsigned long effectStartMs;
 extern unsigned long lastEffectUpdateMs;
 extern const unsigned long WAVE_UPDATE_INTERVAL_MS;
 
-// ===================== Nano 云台参数 (extern) =====================
+// ===================== Nano 浜戝彴鍙傛暟 (extern) =====================
 extern int panDeg;
 extern int tiltDeg;
 extern int sliderMm;
@@ -144,6 +163,6 @@ extern int panSpeedDeg;
 extern int tiltSpeedDeg;
 extern int sliderSpeedMm;
 
-// ===================== 设备配置 (extern) =====================
+// ===================== 璁惧閰嶇疆 (extern) =====================
 extern DeviceConfig cfg;
 extern String deviceId;

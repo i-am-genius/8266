@@ -3,6 +3,9 @@
 
 void applyLightSettings(int br, int tp);
 void stopEffectWaveForManualControl();
-void locateBreath(int times, int cycleMs);
+void startLocateBreath(int times, int cycleMs);
+void stopLocateBreath(bool restoreLight = true);
+bool isLocateBreathActive();
+void handleLocateBreathTask();
 void updateEffectLoop();
 void safeCopyFabric(const char* src);

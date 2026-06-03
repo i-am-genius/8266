@@ -12,15 +12,79 @@ float tiltVelocityDegPerSec = 0.0f;
 unsigned long joystickExpireAt = 0;
 unsigned long lastArmMotionUpdateAt = 0;
 unsigned long lastNanoPositionSendAt = 0;
+bool nanoLineSeen = false;
+String lastNanoLine = "";
+unsigned long lastNanoRxAt = 0;
+bool lastNanoHomingOk = false;
+bool lastNanoHallStatusOk = false;
 
-// Preserve fractional motion so small joystick deltas are not lost.
-static float panRemainder = 0.0f;
-static float tiltRemainder = 0.0f;
-static int lastJoystickSentPanDeg = 10000;
-static int lastJoystickSentTiltDeg = 10000;
+static const unsigned long JOYSTICK_TARGET_SEND_INTERVAL_MS = 120;
+static const float JOYSTICK_LEAD_SECONDS = 0.6f;
+static const float JOYSTICK_DEADZONE_DEG_PER_SEC = 0.05f;
+static const float JOYSTICK_TARGET_EPS_DEG = 0.8f;
+static const float JOYSTICK_SPEED_EPS_DEG_PER_SEC = 0.25f;
+static const float PAN_MIN_LEAD_DEG = 3.0f;
+static const float TILT_MIN_LEAD_DEG = 2.0f;
 
-String formatDeg(int value) {
-  return String((float)value, 2);
+static float panEstimateDeg = 0.0f;
+static float tiltEstimateDeg = 0.0f;
+static float lastSentPanTargetDeg = 10000.0f;
+static float lastSentTiltTargetDeg = 10000.0f;
+static float lastSentPanJoystickSpeed = -1.0f;
+static float lastSentTiltJoystickSpeed = -1.0f;
+
+String formatDeg(float value) {
+  return String(value, 2);
+}
+
+float joystickLeadForVelocity(float velocityDegPerSec, float minLeadDeg) {
+  if (fabs(velocityDegPerSec) <= JOYSTICK_DEADZONE_DEG_PER_SEC) {
+    return 0.0f;
+  }
+
+  float lead = velocityDegPerSec * JOYSTICK_LEAD_SECONDS;
+  if (fabs(lead) < minLeadDeg) {
+    lead = velocityDegPerSec > 0.0f ? minLeadDeg : -minLeadDeg;
+  }
+  return lead;
+}
+
+void syncJoystickEstimate(unsigned long now) {
+  if (lastArmMotionUpdateAt == 0) {
+    lastArmMotionUpdateAt = now;
+    return;
+  }
+
+  float dt = (now - lastArmMotionUpdateAt) / 1000.0f;
+  lastArmMotionUpdateAt = now;
+
+  if (dt <= 0.0f) {
+    return;
+  }
+  if (dt > 0.2f) {
+    dt = 0.2f;
+  }
+
+  panEstimateDeg += panVelocityDegPerSec * dt;
+  tiltEstimateDeg += tiltVelocityDegPerSec * dt;
+
+  panEstimateDeg = constrain(panEstimateDeg, (float)PAN_MIN, (float)PAN_MAX);
+  tiltEstimateDeg = constrain(tiltEstimateDeg, (float)TILT_MIN, (float)TILT_MAX);
+
+  panDeg = (int)round(panEstimateDeg);
+  tiltDeg = (int)round(tiltEstimateDeg);
+}
+
+void sendJoystickSpeedIfNeeded(char cmd, float speedDegPerSec, float& lastSentSpeed) {
+  float speed = fabs(speedDegPerSec);
+  if (speed <= JOYSTICK_DEADZONE_DEG_PER_SEC) {
+    return;
+  }
+
+  if (lastSentSpeed < 0.0f || fabs(speed - lastSentSpeed) >= JOYSTICK_SPEED_EPS_DEG_PER_SEC) {
+    sendNano(cmd, String(speed, 2));
+    lastSentSpeed = speed;
+  }
 }
 
 void sendNano(char cmd, const String& value) {
@@ -46,6 +110,9 @@ void pollNano() {
     if (ch == '\r') continue;
     if (ch == '\n') {
       if (line.length() > 0) {
+        lastNanoLine = line;
+        lastNanoRxAt = millis();
+        nanoLineSeen = true;
         DEBUG_SERIAL.println("[NANO] RX " + line);
         line = "";
       }
@@ -124,22 +191,35 @@ void setArmJoystickMotion(float x, float y, int durationMs) {
   x = constrain(x, -1.0f, 1.0f);
   y = constrain(y, -1.0f, 1.0f);
   durationMs = constrain(durationMs, 100, 1000);
+  unsigned long now = millis();
 
   float maxPanSpeed = 8.0f;
   float maxTiltSpeed = 5.0f;
   getArmJoystickMaxSpeed(maxPanSpeed, maxTiltSpeed);
+
+  if (!armJoystickActive) {
+    panEstimateDeg = panDeg;
+    tiltEstimateDeg = tiltDeg;
+    lastSentPanTargetDeg = panEstimateDeg;
+    lastSentTiltTargetDeg = tiltEstimateDeg;
+    lastSentPanJoystickSpeed = -1.0f;
+    lastSentTiltJoystickSpeed = -1.0f;
+    lastArmMotionUpdateAt = now;
+    lastNanoPositionSendAt = 0;
+  } else {
+    syncJoystickEstimate(now);
+  }
 
   joystickX = x;
   joystickY = y;
 
   panVelocityDegPerSec = joystickX * maxPanSpeed;
   tiltVelocityDegPerSec = joystickY * maxTiltSpeed;
-  lastJoystickSentPanDeg = panDeg;
-  lastJoystickSentTiltDeg = tiltDeg;
+  sendJoystickSpeedIfNeeded('s', panVelocityDegPerSec, lastSentPanJoystickSpeed);
+  sendJoystickSpeedIfNeeded('S', tiltVelocityDegPerSec, lastSentTiltJoystickSpeed);
 
   armJoystickActive = true;
-  joystickExpireAt = millis() + durationMs;
-  lastArmMotionUpdateAt = millis();
+  joystickExpireAt = now + durationMs;
 
   DEBUG_SERIAL.printf(
     "[ARM] joystick x=%.2f y=%.2f panVel=%.2f tiltVel=%.2f duration=%d\n",
@@ -152,15 +232,26 @@ void setArmJoystickMotion(float x, float y, int durationMs) {
 }
 
 void stopArmJoystickMotion() {
+  bool wasActive = armJoystickActive;
+
+  if (wasActive) {
+    syncJoystickEstimate(millis());
+    sendNano('p', formatDeg(panEstimateDeg));
+    sendNano('t', formatDeg(tiltEstimateDeg));
+    sendNano('s', String((float)panSpeedDeg, 2));
+    sendNano('S', String((float)tiltSpeedDeg, 2));
+  }
+
   armJoystickActive = false;
   joystickX = 0.0f;
   joystickY = 0.0f;
   panVelocityDegPerSec = 0.0f;
   tiltVelocityDegPerSec = 0.0f;
-  panRemainder = 0.0f;
-  tiltRemainder = 0.0f;
-  lastJoystickSentPanDeg = panDeg;
-  lastJoystickSentTiltDeg = tiltDeg;
+  lastArmMotionUpdateAt = 0;
+  lastSentPanTargetDeg = panEstimateDeg;
+  lastSentTiltTargetDeg = tiltEstimateDeg;
+  lastSentPanJoystickSpeed = -1.0f;
+  lastSentTiltJoystickSpeed = -1.0f;
 
   DEBUG_SERIAL.println("[ARM] joystick stopped");
 }
@@ -171,6 +262,7 @@ void updateArmJoystickMotion() {
   }
 
   unsigned long now = millis();
+  syncJoystickEstimate(now);
 
   // Joystick packets act as a heartbeat; stop if updates stop arriving.
   if ((long)(now - joystickExpireAt) >= 0) {
@@ -179,48 +271,25 @@ void updateArmJoystickMotion() {
     return;
   }
 
-  if (lastArmMotionUpdateAt == 0) {
-    lastArmMotionUpdateAt = now;
-    return;
-  }
-
-  float dt = (now - lastArmMotionUpdateAt) / 1000.0f;
-  lastArmMotionUpdateAt = now;
-
-  // Ignore abnormal frame gaps to avoid a sudden position jump.
-  if (dt <= 0.0f || dt > 0.2f) {
-    return;
-  }
-
-  // Preserve fractional motion so small deltas eventually become whole steps.
-  float panDelta = panVelocityDegPerSec * dt + panRemainder;
-  float tiltDelta = tiltVelocityDegPerSec * dt + tiltRemainder;
-
-  int panStep = (int)panDelta;
-  int tiltStep = (int)tiltDelta;
-
-  panRemainder = panDelta - panStep;
-  tiltRemainder = tiltDelta - tiltStep;
-
-  panDeg += panStep;
-  tiltDeg += tiltStep;
-
-  panDeg = constrain(panDeg, PAN_MIN, PAN_MAX);
-  tiltDeg = constrain(tiltDeg, TILT_MIN, TILT_MAX);
-
-  // Send the current position to Nano at a fixed cadence.
-  if (now - lastNanoPositionSendAt >= 80) {
+  // Send a lead target, not the estimated current position. Nano keeps chasing
+  // the target ahead of the current estimate, which reduces small stop/start
+  // steps without requiring a Nano protocol change.
+  if (now - lastNanoPositionSendAt >= JOYSTICK_TARGET_SEND_INTERVAL_MS) {
     bool sent = false;
 
-    if (panDeg != lastJoystickSentPanDeg) {
-      sendNano('p', formatDeg(panDeg));
-      lastJoystickSentPanDeg = panDeg;
+    float panTargetDeg = panEstimateDeg + joystickLeadForVelocity(panVelocityDegPerSec, PAN_MIN_LEAD_DEG);
+    panTargetDeg = constrain(panTargetDeg, (float)PAN_MIN, (float)PAN_MAX);
+    if (fabs(panTargetDeg - lastSentPanTargetDeg) >= JOYSTICK_TARGET_EPS_DEG) {
+      sendNano('p', formatDeg(panTargetDeg));
+      lastSentPanTargetDeg = panTargetDeg;
       sent = true;
     }
 
-    if (tiltDeg != lastJoystickSentTiltDeg) {
-      sendNano('t', formatDeg(tiltDeg));
-      lastJoystickSentTiltDeg = tiltDeg;
+    float tiltTargetDeg = tiltEstimateDeg + joystickLeadForVelocity(tiltVelocityDegPerSec, TILT_MIN_LEAD_DEG);
+    tiltTargetDeg = constrain(tiltTargetDeg, (float)TILT_MIN, (float)TILT_MAX);
+    if (fabs(tiltTargetDeg - lastSentTiltTargetDeg) >= JOYSTICK_TARGET_EPS_DEG) {
+      sendNano('t', formatDeg(tiltTargetDeg));
+      lastSentTiltTargetDeg = tiltTargetDeg;
       sent = true;
     }
 

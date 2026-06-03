@@ -2,10 +2,37 @@
 #include "device/light_control.h"
 #include "device/arm_controller.h"
 #include "device/ota_manager.h"
+#include "device/self_test.h"
 #include "network/http_reporter.h"
 
+void sendWsPing() {
+  if (WiFi.status() != WL_CONNECTED || !wsConnected) {
+    return;
+  }
+
+  StaticJsonDocument<96> doc;
+  doc["type"] = "ping";
+  doc["id"] = deviceId;
+  doc["chipId"] = deviceId;
+
+  String pingMsg;
+  serializeJson(doc, pingMsg);
+  webSocket.sendTXT(pingMsg);
+  lastPing = millis();
+
+#if LOG_WS_HEARTBEAT
+  DEBUG_SERIAL.println("发送 WebSocket 心跳: " + pingMsg);
+#endif
+}
+
+void handleWsHeartbeat() {
+  if (millis() - lastPing >= wsPingInterval) {
+    sendWsPing();
+  }
+}
+
 void sendWsRegister() {
-  StaticJsonDocument<320> doc;
+  StaticJsonDocument<1024> doc;
   doc["type"] = "register";
   doc["id"] = deviceId;
   doc["chipId"] = deviceId;
@@ -25,8 +52,6 @@ void sendWsRegister() {
 }
 
 void handleWsMessage(const String& text) {
-  DEBUG_SERIAL.println("[WS] 收到消息: " + text);
-
   StaticJsonDocument<768> doc;
   DeserializationError err = deserializeJson(doc, text);
   if (err) {
@@ -45,6 +70,15 @@ void handleWsMessage(const String& text) {
 
   String type = root["type"] | payload["type"] | "";
 
+  if (type == "pong") {
+#if LOG_WS_HEARTBEAT
+    DEBUG_SERIAL.println("[WS] 收到消息: " + text);
+#endif
+    return;
+  }
+
+  DEBUG_SERIAL.println("[WS] 收到消息: " + text);
+
   if (type == "state" || type == "control") {
     String targetId = payload["id"] | "";
     String chipId = payload["chipId"] | "";
@@ -55,6 +89,7 @@ void handleWsMessage(const String& text) {
     }
 
     stopEffectWaveForManualControl();
+    stopLocateBreath(false);
 
     brightness = payload["brightness"] | brightness;
     temp = payload["temp"] | temp;
@@ -69,7 +104,6 @@ void handleWsMessage(const String& text) {
     }
 
     safeCopyFabric(payload["fabric"]);
-    sendDeviceStateReport();
 
     DEBUG_SERIAL.printf("WS控制：亮度=%d 色温=%d 自动=%d 推荐亮度=%d 推荐色温=%d 面料=%s\n",
                   brightness, temp, autoMode,
@@ -85,6 +119,8 @@ void handleWsMessage(const String& text) {
       DEBUG_SERIAL.println("[EFFECT] unsupported effect: " + effect);
       return;
     }
+
+    stopLocateBreath(false);
 
     if (enabled) {
       effectRestoreBrightness = autoMode ? recommendedBrightness : brightness;
@@ -114,7 +150,7 @@ void handleWsMessage(const String& text) {
       recommendedTemp = initialTemp;
       applyLightSettings(brightness, temp);
       lastLightUpdate = millis();
-      sendDeviceStateReport();
+      requestDeviceStateReport("WS_EFFECT_START");
 
       DEBUG_SERIAL.printf(
         "[EFFECT] wave start baseTemp=%d range=%d speed=%.2f brightness=%d phaseOffset=%.2f restoreB=%d restoreT=%d\n",
@@ -130,7 +166,7 @@ void handleWsMessage(const String& text) {
       effectWaveEnabled = false;
       applyLightSettings(brightness, temp);
       lastLightUpdate = millis();
-      sendDeviceStateReport();
+      requestDeviceStateReport("WS_EFFECT_STOP");
       DEBUG_SERIAL.printf("[EFFECT] wave stop restoreB=%d restoreT=%d\n", effectRestoreBrightness, effectRestoreTemp);
     }
 
@@ -149,7 +185,7 @@ void handleWsMessage(const String& text) {
 
     DEBUG_SERIAL.printf("[LOCATE] 收到呼吸定位指令 times=%d cycleMs=%d\n", times, cycleMs);
 
-    locateBreath(times, cycleMs);
+    startLocateBreath(times, cycleMs);
     return;
   }
 
@@ -264,7 +300,7 @@ void handleWsMessage(const String& text) {
     if (version.length() == 0 || url.length() == 0 || versionCode <= 0) {
       DEBUG_SERIAL.println("[OTA] OTA message missing version/url/versionCode");
       otaStatus = "failed";
-      sendDeviceStateReport();
+      requestDeviceStateReport("OTA_INVALID");
       return;
     }
 
@@ -274,7 +310,7 @@ void handleWsMessage(const String& text) {
       DEBUG_SERIAL.println("[OTA] Same channel and target versionCode is not newer, ignore");
       otaStatus = "idle";
       otaProgress = 0;
-      sendDeviceStateReport();
+      requestDeviceStateReport("OTA_NOT_NEWER");
       return;
     }
 
@@ -282,7 +318,13 @@ void handleWsMessage(const String& text) {
       DEBUG_SERIAL.println("[OTA] Cross-channel OTA allowed");
     }
 
+    stopLocateBreath(true);
     doOtaUpdate(url, version, versionCode, channel, md5);
+    return;
+  }
+
+  if (type == "registerAck" || type == "register_ack" || type == "register_ok") {
+    DEBUG_SERIAL.println("[WS] register ack received");
     return;
   }
 
@@ -292,12 +334,24 @@ void handleWsMessage(const String& text) {
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
+      wsConnected = false;
       DEBUG_SERIAL.println("[WS] 已断开");
       break;
 
     case WStype_CONNECTED:
+      wsConnected = true;
+      lastWsConnectedMs = millis();
       DEBUG_SERIAL.printf("[WS] 已连接: %s\n", payload);
       sendWsRegister();
+      sendWsPing();
+      if (!bootOnlineReportDone && !bootOnlineReportRequested) {
+        bootOnlineReportRequested = true;
+        requestDeviceStateReport("WS_CONNECTED");
+      }
+      if (!bootSelfTestStarted) {
+        bootSelfTestStarted = true;
+        startDeviceSelfTest();
+      }
       break;
 
     case WStype_TEXT:
@@ -305,7 +359,9 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       break;
 
     case WStype_PONG:
+#if LOG_WS_HEARTBEAT
       DEBUG_SERIAL.println("[WS] PONG");
+#endif
       break;
 
     default:

@@ -40,6 +40,7 @@ void handleSetLight() {
   }
 
   stopEffectWaveForManualControl();
+  stopLocateBreath(false);
 
   brightness = doc["brightness"] | brightness;
   temp = doc["temp"] | temp;
@@ -55,7 +56,7 @@ void handleSetLight() {
 
   applyLightSettings(autoMode ? recommendedBrightness : brightness, autoMode ? recommendedTemp : temp);
   lastLightUpdate = millis();
-  sendDeviceStateReport();
+  requestDeviceStateReport("LOCAL_SET_LIGHT");
 
   server.send(200, "application/json", "{\"result\":\"OK\"}");
 }

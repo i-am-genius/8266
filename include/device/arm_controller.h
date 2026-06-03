@@ -15,6 +15,11 @@ extern String currentArmSpeed;
 extern bool armJoystickActive;
 extern unsigned long joystickExpireAt;
 extern unsigned long lastArmMotionUpdateAt;
+extern bool nanoLineSeen;
+extern String lastNanoLine;
+extern unsigned long lastNanoRxAt;
+extern bool lastNanoHomingOk;
+extern bool lastNanoHallStatusOk;
 
 void sendNano(char cmd, const String& value = "");
 void pollNano();

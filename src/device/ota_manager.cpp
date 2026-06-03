@@ -34,7 +34,7 @@ static void otaProgressCallback(int current, int total) {
   ) {
     lastOtaProgressReport = percent;
     lastOtaProgressReportMs = now;
-    sendDeviceStateReport();
+    requestDeviceStateReport("OTA_PROGRESS");
   }
 
   yield();
@@ -55,7 +55,7 @@ void doOtaUpdate(const String& url, const String& version, int versionCode, cons
   lastOtaProgressReport = -1;
   lastOtaProgressReportMs = 0;
   firmwareChannel = FW_CHANNEL;
-  sendDeviceStateReport();
+  requestDeviceStateReport("OTA_START");
 
   DEBUG_SERIAL.println("[OTA] 收到升级通知");
   DEBUG_SERIAL.println("[OTA] 当前版本: " + String(FW_VERSION));
@@ -84,7 +84,7 @@ void doOtaUpdate(const String& url, const String& version, int versionCode, cons
                     ESPhttpUpdate.getLastError(),
                     ESPhttpUpdate.getLastErrorString().c_str());
       otaStatus = "failed";
-      sendDeviceStateReport();
+      requestDeviceStateReport("OTA_FAILED");
       otaInProgress = false;
       beginWebSocketClient();
       break;
@@ -92,7 +92,7 @@ void doOtaUpdate(const String& url, const String& version, int versionCode, cons
     case HTTP_UPDATE_NO_UPDATES:
       otaStatus = "idle";
       otaProgress = 0;
-      sendDeviceStateReport();
+      requestDeviceStateReport("OTA_NO_UPDATES");
       DEBUG_SERIAL.println("[OTA] 没有更新");
       otaInProgress = false;
       beginWebSocketClient();
@@ -101,7 +101,7 @@ void doOtaUpdate(const String& url, const String& version, int versionCode, cons
     case HTTP_UPDATE_OK:
       otaStatus = "success";
       otaProgress = 100;
-      sendDeviceStateReport();
+      requestDeviceStateReport("OTA_SUCCESS");
       delay(300);
       DEBUG_SERIAL.println("[OTA] 升级成功，设备将自动重启");
       ESP.restart();

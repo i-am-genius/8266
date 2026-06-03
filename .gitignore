@@ -3,6 +3,8 @@
 build/
 dist/
 logs/
+analysis_artifacts/
+data/config.json
 *.bin
 *.elf
 *.map
