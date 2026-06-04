@@ -211,14 +211,14 @@ void handleWsMessage(const String& text) {
     if (payload.containsKey("pan")) {
       panDeg = payload["pan"].as<int>();
       panDeg = constrain(panDeg, PAN_MIN, PAN_MAX);
-      sendNano('p', String((float)panDeg, 2));
+      sendPanTarget(panDeg);
       changed = true;
     }
 
     if (payload.containsKey("tilt")) {
       tiltDeg = payload["tilt"].as<int>();
       tiltDeg = constrain(tiltDeg, TILT_MIN, TILT_MAX);
-      sendNano('t', String((float)tiltDeg, 2));
+      sendTiltTarget(tiltDeg);
       changed = true;
     }
 

@@ -25,6 +25,10 @@ static const float JOYSTICK_TARGET_EPS_DEG = 0.8f;
 static const float JOYSTICK_SPEED_EPS_DEG_PER_SEC = 0.25f;
 static const float PAN_MIN_LEAD_DEG = 3.0f;
 static const float TILT_MIN_LEAD_DEG = 2.0f;
+static const float TILT_COMMAND_RATIO = 36.0f / 48.0f;
+static const unsigned long NANO_STARTUP_SYNC_DELAY_MS = 1800;
+static const unsigned long NANO_STARTUP_SYNC_RETRY_MS = 1200;
+static const uint8_t NANO_STARTUP_SYNC_MAX_ATTEMPTS = 3;
 
 static float panEstimateDeg = 0.0f;
 static float tiltEstimateDeg = 0.0f;
@@ -32,9 +36,82 @@ static float lastSentPanTargetDeg = 10000.0f;
 static float lastSentTiltTargetDeg = 10000.0f;
 static float lastSentPanJoystickSpeed = -1.0f;
 static float lastSentTiltJoystickSpeed = -1.0f;
+static bool nanoStartupSyncScheduled = false;
+static unsigned long nanoStartupSyncScheduledAt = 0;
+static unsigned long nanoStartupSyncLastAttemptAt = 0;
+static uint8_t nanoStartupSyncAttempts = 0;
 
 String formatDeg(float value) {
   return String(value, 2);
+}
+
+static float clampPanTargetDeg(float value) {
+  return constrain(value, (float)PAN_MIN, (float)PAN_MAX);
+}
+
+static float clampTiltTargetDeg(float value) {
+  return constrain(value, (float)TILT_MIN, (float)TILT_MAX);
+}
+
+static float toTiltNanoCommandDeg(float valueDeg) {
+  return clampTiltTargetDeg(valueDeg) * TILT_COMMAND_RATIO;
+}
+
+void sendPanTarget(float valueDeg) {
+  sendNano('p', formatDeg(clampPanTargetDeg(valueDeg)));
+}
+
+void sendTiltTarget(float valueDeg) {
+  sendNano('t', formatDeg(toTiltNanoCommandDeg(valueDeg)));
+}
+
+void sendPanSpeed(float valueDegPerSec) {
+  sendNano('s', String(max(0.0f, valueDegPerSec), 2));
+}
+
+void sendTiltSpeed(float valueDegPerSec) {
+  sendNano('S', String(max(0.0f, valueDegPerSec) * TILT_COMMAND_RATIO, 2));
+}
+
+void scheduleNanoStartupSync() {
+  nanoStartupSyncScheduled = true;
+  nanoStartupSyncScheduledAt = millis();
+  nanoStartupSyncLastAttemptAt = 0;
+  nanoStartupSyncAttempts = 0;
+}
+
+void handleNanoStartupSync() {
+  if (!nanoStartupSyncScheduled) {
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - nanoStartupSyncScheduledAt < NANO_STARTUP_SYNC_DELAY_MS) {
+    return;
+  }
+
+  if (
+    nanoStartupSyncAttempts > 0 &&
+    now - nanoStartupSyncLastAttemptAt < NANO_STARTUP_SYNC_RETRY_MS
+  ) {
+    return;
+  }
+
+  nanoStartupSyncAttempts++;
+  nanoStartupSyncLastAttemptAt = now;
+
+  DEBUG_SERIAL.printf(
+    "[NANO] startup sync %u/%u\n",
+    nanoStartupSyncAttempts,
+    NANO_STARTUP_SYNC_MAX_ATTEMPTS
+  );
+
+  sendNano('m', "16");
+  applyArmSpeed(currentArmSpeed);
+
+  if (nanoStartupSyncAttempts >= NANO_STARTUP_SYNC_MAX_ATTEMPTS) {
+    nanoStartupSyncScheduled = false;
+  }
 }
 
 float joystickLeadForVelocity(float velocityDegPerSec, float minLeadDeg) {
@@ -68,21 +145,21 @@ void syncJoystickEstimate(unsigned long now) {
   panEstimateDeg += panVelocityDegPerSec * dt;
   tiltEstimateDeg += tiltVelocityDegPerSec * dt;
 
-  panEstimateDeg = constrain(panEstimateDeg, (float)PAN_MIN, (float)PAN_MAX);
-  tiltEstimateDeg = constrain(tiltEstimateDeg, (float)TILT_MIN, (float)TILT_MAX);
+  panEstimateDeg = clampPanTargetDeg(panEstimateDeg);
+  tiltEstimateDeg = clampTiltTargetDeg(tiltEstimateDeg);
 
   panDeg = (int)round(panEstimateDeg);
   tiltDeg = (int)round(tiltEstimateDeg);
 }
 
-void sendJoystickSpeedIfNeeded(char cmd, float speedDegPerSec, float& lastSentSpeed) {
+void sendJoystickSpeedIfNeeded(char cmd, float speedDegPerSec, float commandRatio, float& lastSentSpeed) {
   float speed = fabs(speedDegPerSec);
   if (speed <= JOYSTICK_DEADZONE_DEG_PER_SEC) {
     return;
   }
 
   if (lastSentSpeed < 0.0f || fabs(speed - lastSentSpeed) >= JOYSTICK_SPEED_EPS_DEG_PER_SEC) {
-    sendNano(cmd, String(speed, 2));
+    sendNano(cmd, String(speed * commandRatio, 2));
     lastSentSpeed = speed;
   }
 }
@@ -129,10 +206,10 @@ void pollNano() {
 }
 
 void sendPanTilt() {
-  panDeg = constrain(panDeg, PAN_MIN, PAN_MAX);
-  tiltDeg = constrain(tiltDeg, TILT_MIN, TILT_MAX);
-  sendNano('p', formatDeg(panDeg));
-  sendNano('t', formatDeg(tiltDeg));
+  panDeg = (int)round(clampPanTargetDeg(panDeg));
+  tiltDeg = (int)round(clampTiltTargetDeg(tiltDeg));
+  sendPanTarget(panDeg);
+  sendTiltTarget(tiltDeg);
 }
 
 void sendSlider() {
@@ -168,8 +245,8 @@ void applyArmSpeed(const String& speed) {
 
   currentArmSpeed = normalized;
 
-  sendNano('s', String((float)panSpeedDeg, 2));
-  sendNano('S', String((float)tiltSpeedDeg, 2));
+  sendPanSpeed((float)panSpeedDeg);
+  sendTiltSpeed((float)tiltSpeedDeg);
   sendNano('X', String((float)sliderSpeedMm, 2));
 }
 
@@ -215,8 +292,8 @@ void setArmJoystickMotion(float x, float y, int durationMs) {
 
   panVelocityDegPerSec = joystickX * maxPanSpeed;
   tiltVelocityDegPerSec = joystickY * maxTiltSpeed;
-  sendJoystickSpeedIfNeeded('s', panVelocityDegPerSec, lastSentPanJoystickSpeed);
-  sendJoystickSpeedIfNeeded('S', tiltVelocityDegPerSec, lastSentTiltJoystickSpeed);
+  sendJoystickSpeedIfNeeded('s', panVelocityDegPerSec, 1.0f, lastSentPanJoystickSpeed);
+  sendJoystickSpeedIfNeeded('S', tiltVelocityDegPerSec, TILT_COMMAND_RATIO, lastSentTiltJoystickSpeed);
 
   armJoystickActive = true;
   joystickExpireAt = now + durationMs;
@@ -236,10 +313,10 @@ void stopArmJoystickMotion() {
 
   if (wasActive) {
     syncJoystickEstimate(millis());
-    sendNano('p', formatDeg(panEstimateDeg));
-    sendNano('t', formatDeg(tiltEstimateDeg));
-    sendNano('s', String((float)panSpeedDeg, 2));
-    sendNano('S', String((float)tiltSpeedDeg, 2));
+    sendPanTarget(panEstimateDeg);
+    sendTiltTarget(tiltEstimateDeg);
+    sendPanSpeed((float)panSpeedDeg);
+    sendTiltSpeed((float)tiltSpeedDeg);
   }
 
   armJoystickActive = false;
@@ -278,17 +355,17 @@ void updateArmJoystickMotion() {
     bool sent = false;
 
     float panTargetDeg = panEstimateDeg + joystickLeadForVelocity(panVelocityDegPerSec, PAN_MIN_LEAD_DEG);
-    panTargetDeg = constrain(panTargetDeg, (float)PAN_MIN, (float)PAN_MAX);
+    panTargetDeg = clampPanTargetDeg(panTargetDeg);
     if (fabs(panTargetDeg - lastSentPanTargetDeg) >= JOYSTICK_TARGET_EPS_DEG) {
-      sendNano('p', formatDeg(panTargetDeg));
+      sendPanTarget(panTargetDeg);
       lastSentPanTargetDeg = panTargetDeg;
       sent = true;
     }
 
     float tiltTargetDeg = tiltEstimateDeg + joystickLeadForVelocity(tiltVelocityDegPerSec, TILT_MIN_LEAD_DEG);
-    tiltTargetDeg = constrain(tiltTargetDeg, (float)TILT_MIN, (float)TILT_MAX);
+    tiltTargetDeg = clampTiltTargetDeg(tiltTargetDeg);
     if (fabs(tiltTargetDeg - lastSentTiltTargetDeg) >= JOYSTICK_TARGET_EPS_DEG) {
-      sendNano('t', formatDeg(tiltTargetDeg));
+      sendTiltTarget(tiltTargetDeg);
       lastSentTiltTargetDeg = tiltTargetDeg;
       sent = true;
     }
@@ -312,19 +389,19 @@ void handleArmAction(const String& action) {
   if (normalizedAction == "up") {
     tiltDeg += angleStep;
     tiltDeg = constrain(tiltDeg, TILT_MIN, TILT_MAX);
-    sendNano('t', formatDeg(tiltDeg));
+    sendTiltTarget(tiltDeg);
   } else if (normalizedAction == "down") {
     tiltDeg -= angleStep;
     tiltDeg = constrain(tiltDeg, TILT_MIN, TILT_MAX);
-    sendNano('t', formatDeg(tiltDeg));
+    sendTiltTarget(tiltDeg);
   } else if (normalizedAction == "left") {
     panDeg -= angleStep;
     panDeg = constrain(panDeg, PAN_MIN, PAN_MAX);
-    sendNano('p', formatDeg(panDeg));
+    sendPanTarget(panDeg);
   } else if (normalizedAction == "right") {
     panDeg += angleStep;
     panDeg = constrain(panDeg, PAN_MIN, PAN_MAX);
-    sendNano('p', formatDeg(panDeg));
+    sendPanTarget(panDeg);
   } else if (normalizedAction == "center") {
     panDeg = 0;
     tiltDeg = 0;

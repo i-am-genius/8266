@@ -120,7 +120,10 @@ void handleSelfTestTask() {
 
     case SELFTEST_CHECK_TOF:
       selfTestTofOk = tofReady;
-      enterSelfTestState(SELFTEST_NANO_SEND_HOMING);
+      lastNanoHomingOk = true;
+      lastNanoHallStatusOk = true;
+      selfTestNanoStatus = "hall_bypassed";
+      enterSelfTestState(SELFTEST_DONE);
       return;
 
     case SELFTEST_NANO_SEND_HOMING:

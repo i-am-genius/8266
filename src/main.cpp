@@ -96,10 +96,10 @@ int panDeg = 0;
 int tiltDeg = 0;
 int sliderMm = 0;
 int angleStep = 5;
-int sliderStep = 50;
-int panSpeedDeg = 60;
-int tiltSpeedDeg = 60;
-int sliderSpeedMm = 100;
+int sliderStep = 10;
+int panSpeedDeg = 8;
+int tiltSpeedDeg = 5;
+int sliderSpeedMm = 10;
 
 // ===================== 设备配置 =====================
 DeviceConfig cfg;
@@ -127,9 +127,9 @@ void setup() {
 
   setupHardwareAndSensors();
 
-  // 初始化 Nano 云台：细分配置 + 默认速度
-  sendNano('m', "16");
-  applyArmSpeed("normal");
+  // Nano 的启动通常比 ESP 稍慢，这里延时重发几轮初始化，
+  // 以避免首轮 m/s/S/X 在 Nano 串口尚未就绪时丢掉。
+  scheduleNanoStartupSync();
   bool hasConfig = loadConfig();
   bool wifiOk = false;
 
@@ -154,6 +154,7 @@ void setup() {
 void loop() {
   server.handleClient();
   pollNano();
+  handleNanoStartupSync();
 
   if (provisioningMode) {
     handleProvisioningLoop();
