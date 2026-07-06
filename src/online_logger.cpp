@@ -160,10 +160,11 @@ void uploadLogs() {
     ndjson += "\"}\n";
   }
 
-  // Build URL with chipId parameter
+  // Build URL with chipId and uploadUptimeMs parameters
   String url = "http://" + String(logServerHost) + ":" + String(logServerPort) + LOG_UPLOAD_ENDPOINT;
   if (logDeviceId[0] != '\0') {
     url += "?chipId=" + String(logDeviceId);
+    url += "&uploadUptimeMs=" + String(now);
   }
 
   // HTTP POST
