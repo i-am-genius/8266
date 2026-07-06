@@ -4,6 +4,12 @@
 #include "device/ota_manager.h"
 #include "device/self_test.h"
 #include "network/http_reporter.h"
+#include "network/tracking_receiver.h"
+#include "online_logger.h"
+
+static const uint32_t WS_HEARTBEAT_PING_INTERVAL_MS = 30000;
+static const uint32_t WS_HEARTBEAT_PONG_TIMEOUT_MS = 10000;
+static const uint8_t WS_HEARTBEAT_DISCONNECT_COUNT = 3;
 
 void sendWsPing() {
   if (WiFi.status() != WL_CONNECTED || !wsConnected) {
@@ -49,6 +55,7 @@ void sendWsRegister() {
   serializeJson(doc, msg);
   webSocket.sendTXT(msg);
   DEBUG_SERIAL.println("[WS] register: " + msg);
+  LOG_INFO("WS", "WS 注册消息已发送");
 }
 
 void handleWsMessage(const String& text) {
@@ -192,9 +199,8 @@ void handleWsMessage(const String& text) {
   if (type == "arm_joystick") {
     float x = payload["x"] | 0.0f;
     float y = payload["y"] | 0.0f;
-    int durationMs = payload["durationMs"] | 500;
 
-    setArmJoystickMotion(x, y, durationMs);
+    setArmJoystickMotion(x, y);
     return;
   }
 
@@ -209,15 +215,13 @@ void handleWsMessage(const String& text) {
     stopArmJoystickMotion();
 
     if (payload.containsKey("pan")) {
-      panDeg = payload["pan"].as<int>();
-      panDeg = constrain(panDeg, PAN_MIN, PAN_MAX);
+      panDeg = (int)clampPanTargetDeg(payload["pan"].as<int>());
       sendPanTarget(panDeg);
       changed = true;
     }
 
     if (payload.containsKey("tilt")) {
-      tiltDeg = payload["tilt"].as<int>();
-      tiltDeg = constrain(tiltDeg, TILT_MIN, TILT_MAX);
+      tiltDeg = (int)clampTiltTargetDeg(payload["tilt"].as<int>());
       sendTiltTarget(tiltDeg);
       changed = true;
     }
@@ -264,6 +268,32 @@ void handleWsMessage(const String& text) {
     }
 
     handleArmAction(action);
+    return;
+  }
+
+  if (type == "lampTrackingPrepare") {
+    String targetLamp = payload["lampChipId"] | payload["targetChipId"] | "";
+    if (targetLamp != deviceId) {
+      DEBUG_SERIAL.println("[TRACK] lampTrackingPrepare not for this lamp, ignored");
+      return;
+    }
+
+    String camChipId = payload["camChipId"] | "";
+    int targetIndex = payload["targetIndex"] | 1;
+    int udpPortValue = payload["udpPort"] | 4211;
+    int lostTimeoutSeconds = payload["trackingLostTimeoutSeconds"] | 2;
+    prepareLampTracking(camChipId, targetIndex, (uint16_t)udpPortValue, (unsigned long)lostTimeoutSeconds);
+    return;
+  }
+
+  if (type == "lampTrackingStop") {
+    String targetLamp = payload["lampChipId"] | payload["targetChipId"] | "";
+    if (targetLamp.length() > 0 && targetLamp != deviceId) {
+      DEBUG_SERIAL.println("[TRACK] lampTrackingStop not for this lamp, ignored");
+      return;
+    }
+    String reason = payload["reason"] | "server stop";
+    stopLampTracking(reason.c_str());
     return;
   }
 
@@ -331,17 +361,42 @@ void handleWsMessage(const String& text) {
   DEBUG_SERIAL.println("[WS] 未处理消息类型: " + type);
 }
 
+void sendLampClothState(const char* clothState, bool tracking, const char* lastTakenAt) {
+  if (!wsConnected) return;
+
+  StaticJsonDocument<192> doc;
+  doc["type"] = "lampClothState";
+  doc["chipId"] = deviceId;
+  doc["clothState"] = clothState ? clothState : "unknown";
+  doc["tracking"] = tracking;
+  if (lastTakenAt && strlen(lastTakenAt) > 0) {
+    doc["lastTakenAt"] = lastTakenAt;
+  }
+
+  String msg;
+  serializeJson(doc, msg);
+  webSocket.sendTXT(msg);
+  DEBUG_SERIAL.println("[WS] lamp cloth state: " + msg);
+}
+
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
       wsConnected = false;
-      DEBUG_SERIAL.println("[WS] 已断开");
+      DEBUG_SERIAL.print("[WS] 已断开");
+      if (payload && length > 0) {
+        DEBUG_SERIAL.print(": ");
+        DEBUG_SERIAL.write(payload, length);
+      }
+      DEBUG_SERIAL.println();
+      LOG_WARN("WS", "WebSocket 已断开");
       break;
 
     case WStype_CONNECTED:
       wsConnected = true;
       lastWsConnectedMs = millis();
       DEBUG_SERIAL.printf("[WS] 已连接: %s\n", payload);
+      LOG_INFO("WS", String("WebSocket 已连接 host=" + cfg.serverHost).c_str());
       sendWsRegister();
       sendWsPing();
       if (!bootOnlineReportDone && !bootOnlineReportRequested) {
@@ -370,6 +425,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 }
 
 void beginWebSocketClient() {
+  wsClientStarted = true;
   webSocket.disconnect();
   delay(100);
 
@@ -380,7 +436,13 @@ void beginWebSocketClient() {
   DEBUG_SERIAL.println("url  = ws://" + cfg.serverHost + ":" + String(cfg.wsPort) + String(WS_PATH));
 
   webSocket.begin(cfg.serverHost.c_str(), cfg.wsPort, WS_PATH);
+  // Remove the library's default "Origin: file://" header; Spring rejects it.
+  webSocket.setExtraHeaders();
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(5000);
-  webSocket.enableHeartbeat(15000, 3000, 2);
+  webSocket.enableHeartbeat(
+    WS_HEARTBEAT_PING_INTERVAL_MS,
+    WS_HEARTBEAT_PONG_TIMEOUT_MS,
+    WS_HEARTBEAT_DISCONNECT_COUNT
+  );
 }

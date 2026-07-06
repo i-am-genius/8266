@@ -1,6 +1,14 @@
 #include "device/ota_manager.h"
 #include "network/http_reporter.h"
 #include "network/ws_client.h"
+#include "online_logger.h"
+
+static void reportOtaStateNow(const char* reason) {
+  if (!sendDeviceStateReport(false, reason)) {
+    requestDeviceStateReport(reason);
+  }
+  yield();
+}
 
 // ---- OTA 回调 ----
 
@@ -34,7 +42,7 @@ static void otaProgressCallback(int current, int total) {
   ) {
     lastOtaProgressReport = percent;
     lastOtaProgressReportMs = now;
-    requestDeviceStateReport("OTA_PROGRESS");
+    reportOtaStateNow("OTA_PROGRESS");
   }
 
   yield();
@@ -55,12 +63,15 @@ void doOtaUpdate(const String& url, const String& version, int versionCode, cons
   lastOtaProgressReport = -1;
   lastOtaProgressReportMs = 0;
   firmwareChannel = FW_CHANNEL;
-  requestDeviceStateReport("OTA_START");
+  reportOtaStateNow("OTA_START");
 
   DEBUG_SERIAL.println("[OTA] 收到升级通知");
   DEBUG_SERIAL.println("[OTA] 当前版本: " + String(FW_VERSION));
   DEBUG_SERIAL.println("[OTA] 目标版本: " + version);
   DEBUG_SERIAL.println("[OTA] 下载地址: " + url);
+
+  String otaMsg = "OTA 开始 当前版本=" + String(FW_VERSION) + " 目标版本=" + version;
+  LOG_INFO("OTA", otaMsg.c_str());
 
   webSocket.disconnect();
   delay(200);
@@ -84,15 +95,19 @@ void doOtaUpdate(const String& url, const String& version, int versionCode, cons
                     ESPhttpUpdate.getLastError(),
                     ESPhttpUpdate.getLastErrorString().c_str());
       otaStatus = "failed";
-      requestDeviceStateReport("OTA_FAILED");
+      reportOtaStateNow("OTA_FAILED");
       otaInProgress = false;
+      {
+        String errMsg = "OTA 失败 code=" + String(ESPhttpUpdate.getLastError()) + " err=" + ESPhttpUpdate.getLastErrorString();
+        LOG_ERROR("OTA", errMsg.c_str());
+      }
       beginWebSocketClient();
       break;
 
     case HTTP_UPDATE_NO_UPDATES:
       otaStatus = "idle";
       otaProgress = 0;
-      requestDeviceStateReport("OTA_NO_UPDATES");
+      reportOtaStateNow("OTA_NO_UPDATES");
       DEBUG_SERIAL.println("[OTA] 没有更新");
       otaInProgress = false;
       beginWebSocketClient();
@@ -101,9 +116,10 @@ void doOtaUpdate(const String& url, const String& version, int versionCode, cons
     case HTTP_UPDATE_OK:
       otaStatus = "success";
       otaProgress = 100;
-      requestDeviceStateReport("OTA_SUCCESS");
-      delay(300);
+      reportOtaStateNow("OTA_SUCCESS");
+      delay(800);
       DEBUG_SERIAL.println("[OTA] 升级成功，设备将自动重启");
+      LOG_INFO("OTA", "OTA 成功 即将重启");
       ESP.restart();
       break;
   }

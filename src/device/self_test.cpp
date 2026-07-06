@@ -2,12 +2,14 @@
 #include "device/arm_controller.h"
 #include "network/http_reporter.h"
 #include "network/ws_client.h"
+#include "online_logger.h"
 
-static const unsigned long SELFTEST_NANO_HOMING_TIMEOUT_MS = 8000;
+static const unsigned long SELFTEST_NANO_HOMING_TIMEOUT_MS = 30000;
 static const unsigned long SELFTEST_NANO_STATUS_TIMEOUT_MS = 2000;
 
 static SelfTestState selfTestState = SELFTEST_IDLE;
 static unsigned long selfTestStepStartedAt = 0;
+static bool lastNanoCommOk = false;
 
 String hallStateFromNanoStatus(const String& status, const char* key) {
   String needle = String(key) + "=";
@@ -46,7 +48,7 @@ static bool selfTestStepTimedOut(unsigned long timeoutMs) {
 
 static void finishSelfTest() {
   selfTestCheckedAtMs = millis();
-  selfTestNanoOk = lastNanoHomingOk && lastNanoHallStatusOk;
+  selfTestNanoOk = lastNanoCommOk;
   if (selfTestNanoStatus.length() == 0) {
     selfTestNanoStatus = selfTestNanoOk ? lastNanoLine : "no_response";
   }
@@ -62,6 +64,18 @@ static void finishSelfTest() {
     selfTestNanoOk,
     selfTestNanoStatus.c_str()
   );
+
+  bool overall = selfTestFsOk && selfTestWifiOk && selfTestWsOk && selfTestBh1750Ok && selfTestTofOk && selfTestNanoOk;
+  String selfTestMsg = "自检完成 overall=" + String(overall ? 1 : 0) +
+                       " fs=" + String(selfTestFsOk ? 1 : 0) +
+                       " bh1750=" + String(selfTestBh1750Ok ? 1 : 0) +
+                       " tof=" + String(selfTestTofOk ? 1 : 0) +
+                       " nano=" + String(selfTestNanoOk ? 1 : 0);
+  if (overall) {
+    LOG_INFO("TEST", selfTestMsg.c_str());
+  } else {
+    LOG_WARN("TEST", selfTestMsg.c_str());
+  }
 
   if (!bootSelfTestReportDone) {
     requestDeviceStateReport("SELFTEST_DONE", true);
@@ -82,6 +96,7 @@ void startDeviceSelfTest() {
   selfTestBh1750Ok = false;
   selfTestTofOk = false;
   selfTestNanoOk = false;
+  lastNanoCommOk = false;
   lastNanoHomingOk = false;
   lastNanoHallStatusOk = false;
   selfTestNanoStatus = "running";
@@ -120,10 +135,13 @@ void handleSelfTestTask() {
 
     case SELFTEST_CHECK_TOF:
       selfTestTofOk = tofReady;
-      lastNanoHomingOk = true;
-      lastNanoHallStatusOk = true;
-      selfTestNanoStatus = "hall_bypassed";
-      enterSelfTestState(SELFTEST_DONE);
+      if (selfTestNanoHomingEnabled) {
+        enterSelfTestState(SELFTEST_NANO_SEND_HOMING);
+      } else {
+        lastNanoHomingOk = true;
+        selfTestNanoStatus = "homing_disabled";
+        enterSelfTestState(SELFTEST_NANO_SEND_STATUS);
+      }
       return;
 
     case SELFTEST_NANO_SEND_HOMING:
@@ -137,6 +155,8 @@ void handleSelfTestTask() {
 
     case SELFTEST_NANO_WAIT_HOMING:
       if (hasFreshNanoLine()) {
+        lastNanoCommOk = true;
+
         if (lastNanoLine.indexOf("Complete") >= 0) {
           lastNanoHomingOk = true;
           panDeg = 0;
@@ -161,17 +181,32 @@ void handleSelfTestTask() {
       return;
 
     case SELFTEST_NANO_SEND_STATUS:
-      selfTestNanoStatus = "checking_hall";
+      selfTestNanoStatus = selfTestNanoHallReadEnabled ? "checking_hall" : "checking_status";
       enterSelfTestState(SELFTEST_NANO_WAIT_STATUS);
-      sendNano('h');
+      if (selfTestNanoHallReadEnabled) {
+        sendNano('h');
+      } else {
+        sendNano('R');
+      }
       return;
 
     case SELFTEST_NANO_WAIT_STATUS:
-      if (hasFreshNanoLine() && lastNanoLine.indexOf("Hall pan=") >= 0) {
-        lastNanoHallStatusOk = true;
-        selfTestNanoStatus = lastNanoLine;
-        enterSelfTestState(SELFTEST_DONE);
-        return;
+      if (hasFreshNanoLine()) {
+        if (selfTestNanoHallReadEnabled && lastNanoLine.indexOf("Hall pan=") >= 0) {
+          lastNanoCommOk = true;
+          lastNanoHallStatusOk = true;
+          selfTestNanoStatus = lastNanoLine;
+          enterSelfTestState(SELFTEST_DONE);
+          return;
+        }
+
+        if (!selfTestNanoHallReadEnabled) {
+          lastNanoCommOk = true;
+          lastNanoHallStatusOk = true;
+          selfTestNanoStatus = "hall_disabled";
+          enterSelfTestState(SELFTEST_DONE);
+          return;
+        }
       }
 
       if (selfTestStepTimedOut(SELFTEST_NANO_STATUS_TIMEOUT_MS)) {
@@ -195,12 +230,16 @@ void appendSelfTestJson(JsonObject root) {
   selfTestWifiOk = WiFi.status() == WL_CONNECTED;
   selfTestWsOk = wsConnected;
 
+  bool nanoHomingRequiredOk = !selfTestNanoHomingEnabled || lastNanoHomingOk;
+  bool nanoHallRequiredOk = !selfTestNanoHallReadEnabled || lastNanoHallStatusOk;
   bool overall = selfTestFsOk
       && selfTestWifiOk
       && selfTestWsOk
       && selfTestBh1750Ok
       && selfTestTofOk
-      && selfTestNanoOk;
+      && selfTestNanoOk
+      && nanoHomingRequiredOk
+      && nanoHallRequiredOk;
 
   JsonObject selfTest = root["selfTest"].to<JsonObject>();
   selfTest["done"] = selfTestDone;
@@ -212,12 +251,28 @@ void appendSelfTestJson(JsonObject root) {
   selfTest["bh1750"] = selfTestBh1750Ok;
   selfTest["tof"] = selfTestTofOk;
   selfTest["nano"] = selfTestNanoOk;
-  selfTest["nanoHoming"] = lastNanoHomingOk;
-  selfTest["nanoHallStatus"] = lastNanoHallStatusOk;
+  selfTest["nanoHomingEnabled"] = selfTestNanoHomingEnabled;
+  selfTest["nanoHallReadEnabled"] = selfTestNanoHallReadEnabled;
+  if (selfTestNanoHomingEnabled) {
+    selfTest["nanoHoming"] = lastNanoHomingOk;
+  } else {
+    selfTest["nanoHoming"] = "disabled";
+  }
+  if (selfTestNanoHallReadEnabled) {
+    selfTest["nanoHallStatus"] = lastNanoHallStatusOk;
+  } else {
+    selfTest["nanoHallStatus"] = "disabled";
+  }
   selfTest["nanoStatus"] = selfTestNanoStatus;
 
   JsonObject hall = selfTest["hall"].to<JsonObject>();
-  hall["pan"] = hallStateFromNanoStatus(selfTestNanoStatus, "pan");
-  hall["tilt"] = hallStateFromNanoStatus(selfTestNanoStatus, "tilt");
-  hall["slider"] = hallStateFromNanoStatus(selfTestNanoStatus, "slider");
+  if (selfTestNanoHallReadEnabled) {
+    hall["pan"] = hallStateFromNanoStatus(selfTestNanoStatus, "pan");
+    hall["tilt"] = hallStateFromNanoStatus(selfTestNanoStatus, "tilt");
+    hall["slider"] = hallStateFromNanoStatus(selfTestNanoStatus, "slider");
+  } else {
+    hall["pan"] = "disabled";
+    hall["tilt"] = "disabled";
+    hall["slider"] = "disabled";
+  }
 }
