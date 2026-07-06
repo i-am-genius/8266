@@ -78,6 +78,7 @@ struct LogEntry {
 **请求头**：
 ```
 Content-Type: application/x-ndjson
+X-Upload-Secret: {upload-secret}
 ```
 
 **请求体**：每行一个 JSON 对象（NDJSON 格式）
@@ -91,11 +92,13 @@ Content-Type: application/x-ndjson
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| uptimeMs | long | 设备启动后的毫秒数 |
+| uptimeMs | long | 设备启动后的毫秒数（**不是真实时间戳**） |
 | seq | int | 日志序号，递增 |
 | level | String | DEBUG / INFO / WARN / ERROR |
 | module | String | 模块标识，12 字符以内 |
 | msg | String | 日志内容，128 字符以内 |
+
+**重要说明**：ESP8266 没有可靠 RTC，**不发送真实时间戳**。`uptimeMs` 是设备启动后的毫秒数，由后端在接收时用服务器时间回推真实时间戳。
 
 ### 2.3 JSONL 文件格式
 
@@ -110,7 +113,7 @@ Content-Type: application/x-ndjson
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| ts | long | 后端补充的 Unix 毫秒时间戳，用于前端展示和筛选 |
+| ts | long | **后端生成**的 Unix 毫秒时间戳，用于前端展示和筛选 |
 | uptimeMs | long | ESP8266 启动后的毫秒数，用于排查设备运行状态 |
 | seq | int | 设备端日志序号，用于排序/去重 |
 | level | String | DEBUG / INFO / WARN / ERROR |
@@ -118,6 +121,27 @@ Content-Type: application/x-ndjson
 | msg | String | 日志内容 |
 
 **文件路径**：`/logs/{chipId}/{yyyy-MM-dd}.jsonl`
+
+**时间戳生成规则**：
+
+后端在写入 JSONL 文件时，使用以下公式回推每条日志的真实时间戳：
+
+```java
+ts = serverNow - (uploadUptimeMs - entry.uptimeMs)
+```
+
+其中：
+- `serverNow`：服务器当前时间（System.currentTimeMillis()）
+- `uploadUptimeMs`：ESP8266 上传时的 uptimeMs（URL 参数）
+- `entry.uptimeMs`：每条日志记录时的 uptimeMs
+
+**异常保护**：
+- `uptimeMs` 为空 → 使用 `serverNow`
+- `uploadUptimeMs <= 0` → 使用 `serverNow`
+- `entry.uptimeMs > uploadUptimeMs` → 使用 `serverNow`
+- `delta > 24 小时` → 使用 `serverNow`
+
+**优势**：同一批上传的多条日志能保留相对时间顺序
 
 ---
 
