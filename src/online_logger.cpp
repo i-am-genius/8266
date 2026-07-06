@@ -149,7 +149,7 @@ void uploadLogs() {
     int idx = (startIdx + i) % LOG_RING_SIZE;
     LogEntry& e = logRing[idx];
 
-    ndjson += "{\"ts\":";
+    ndjson += "{\"uptimeMs\":";
     ndjson += String(e.timestampMs);
     ndjson += ",\"level\":\"";
     ndjson += levelToString(e.level);
