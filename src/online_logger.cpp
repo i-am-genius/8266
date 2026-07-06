@@ -71,22 +71,35 @@ void logWrite(uint8_t level, const char* module, const char* fmt, ...) {
   DEBUG_SERIAL.println(buf);
 
   // Write to ring buffer
-  LogEntry& entry = logRing[logHead];
-  entry.timestampMs = millis();
-  entry.level = level;
-
-  // Copy module name (truncate if needed)
-  strncpy(entry.module, module, sizeof(entry.module) - 1);
-  entry.module[sizeof(entry.module) - 1] = '\0';
-
-  // Copy message (truncate if needed)
-  strncpy(entry.message, buf, sizeof(entry.message) - 1);
-  entry.message[sizeof(entry.message) - 1] = '\0';
-
-  logHead = (logHead + 1) % LOG_RING_SIZE;
   if (logCount < LOG_RING_SIZE) {
+    // Buffer not full, write normally
+    LogEntry& entry = logRing[logHead];
+    entry.timestampMs = millis();
+    entry.level = level;
+    strncpy(entry.module, module, sizeof(entry.module) - 1);
+    entry.module[sizeof(entry.module) - 1] = '\0';
+    strncpy(entry.message, buf, sizeof(entry.message) - 1);
+    entry.message[sizeof(entry.message) - 1] = '\0';
+    logHead = (logHead + 1) % LOG_RING_SIZE;
     logCount++;
+  } else if (level >= LOG_LEVEL_WARN) {
+    // Buffer full, only replace DEBUG/INFO with WARN/ERROR
+    // Find oldest DEBUG/INFO entry to replace
+    for (int i = 0; i < LOG_RING_SIZE; i++) {
+      int idx = (logHead + i) % LOG_RING_SIZE;
+      if (logRing[idx].level < LOG_LEVEL_WARN) {
+        LogEntry& entry = logRing[idx];
+        entry.timestampMs = millis();
+        entry.level = level;
+        strncpy(entry.module, module, sizeof(entry.module) - 1);
+        entry.module[sizeof(entry.module) - 1] = '\0';
+        strncpy(entry.message, buf, sizeof(entry.message) - 1);
+        entry.message[sizeof(entry.message) - 1] = '\0';
+        break;
+      }
+    }
   }
+  // If buffer full and new log is DEBUG/INFO, discard it
 }
 
 // ===================== Write (String overload) =====================
