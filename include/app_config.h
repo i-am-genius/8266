@@ -49,8 +49,8 @@ const int     LOCATE_STEPS              = 36;
 const char* const DEFAULT_SERVER_HOST = "device.genius.show";
 const uint16_t DEFAULT_HTTP_PORT = 80;
 const uint16_t DEFAULT_WS_PORT   = 80;
-const char* const DEFAULT_WIFI_SSID = "";
-const char* const DEFAULT_WIFI_PASSWORD = "";
+const char* const DEFAULT_WIFI_SSID = "somebody的iPhone";
+const char* const DEFAULT_WIFI_PASSWORD = "20040000";
 
 // ===================== 瀹氭椂鍙傛暟 =====================
 const unsigned long lightSendInterval    = 30000;
@@ -68,6 +68,10 @@ const int           otaProgressReportMinStep       = 5;
 const int udpPort = 4210;
 const uint32_t NANO_BAUD = 57600;
 
+// Nano self-test switches. Set either to false to skip motion or Hall reads.
+extern bool selfTestNanoHomingEnabled;
+extern bool selfTestNanoHallReadEnabled;
+
 // ===================== DeviceConfig =====================
 struct DeviceConfig {
   String ssid = DEFAULT_WIFI_SSID;
@@ -75,6 +79,7 @@ struct DeviceConfig {
   String serverHost;
   uint16_t httpPort;
   uint16_t wsPort;
+  String uploadSecret;  // 日志上传密钥
 };
 
 // ===================== 浼犳劅鍣?/ 澶栬 (extern) =====================
@@ -100,6 +105,8 @@ extern unsigned long selfTestCheckedAtMs;
 extern String selfTestNanoStatus;
 extern bool enableBroadcast;
 extern bool enableAnnounce;
+extern bool backendDeviceAdded;
+extern bool wsClientStarted;
 extern bool provisioningMode;
 extern bool smartConfigActive;
 extern bool smartConfigDoneHandled;

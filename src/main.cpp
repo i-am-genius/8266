@@ -10,6 +10,8 @@
 #include "device/self_test.h"
 #include "server/local_server.h"
 #include "network/udp_discovery.h"
+#include "network/tracking_receiver.h"
+#include "online_logger.h"
 
 // ==================== HTTP 烟雾测试 ====================
 // 启用后固件只做 WiFi + HTTP announce，排除其他所有模块干扰
@@ -36,8 +38,12 @@ bool selfTestTofOk = false;
 bool selfTestNanoOk = false;
 unsigned long selfTestCheckedAtMs = 0;
 String selfTestNanoStatus = "not_run";
+bool selfTestNanoHomingEnabled = true;
+bool selfTestNanoHallReadEnabled = true;
 bool enableBroadcast = true;
 bool enableAnnounce = true;
+bool backendDeviceAdded = false;
+bool wsClientStarted = false;
 bool provisioningMode = false;
 bool smartConfigActive = false;
 bool smartConfigDoneHandled = false;
@@ -111,6 +117,12 @@ void setup() {
   DEBUG_SERIAL.begin(115200);
   delay(200);
 
+  logInit();
+
+  // Match the working 8266test startup path: prime Nano before WiFi/sensors.
+  sendNano('m', "16");
+  applyArmSpeed(currentArmSpeed);
+
   deviceId = makeDeviceId();
 
   DEBUG_SERIAL.println("\n========================");
@@ -119,10 +131,14 @@ void setup() {
   DEBUG_SERIAL.println("FW = " + String(FW_VERSION));
   DEBUG_SERIAL.println("========================");
 
+  LOG_INFO("BOOT", String("设备启动 ID=" + deviceId + " FW=" + String(FW_VERSION)).c_str());
+
   if (!LittleFS.begin()) {
     DEBUG_SERIAL.println("[FS] LittleFS 挂载失败");
+    LOG_ERROR("BOOT", "LittleFS 挂载失败");
   } else {
     fsReady = true;
+    LOG_INFO("BOOT", "LittleFS 挂载成功");
   }
 
   setupHardwareAndSensors();
@@ -133,22 +149,40 @@ void setup() {
   bool hasConfig = loadConfig();
   bool wifiOk = false;
 
+  // Set log server after config is loaded
+  String logHost = cfg.serverHost.length() > 0 ? cfg.serverHost : String(DEFAULT_SERVER_HOST);
+  uint16_t logPort = cfg.httpPort > 0 ? cfg.httpPort : DEFAULT_HTTP_PORT;
+  const char* logSecret = cfg.uploadSecret.length() > 0 ? cfg.uploadSecret.c_str() : nullptr;
+  logSetServer(logHost.c_str(), logPort, logSecret);
+  logSetDeviceId(deviceId.c_str());
+
   if (hasConfig) {
     DEBUG_SERIAL.println("[BOOT] Saved config found, trying to connect...");
+    LOG_INFO("BOOT", "尝试连接已保存的 WiFi");
     wifiOk = connectSavedWiFi();
   } else {
     DEBUG_SERIAL.println("[BOOT] No saved config, entering parallel provisioning...");
+    LOG_INFO("BOOT", "无已保存配置，进入配网模式");
   }
 
   if (!wifiOk) {
+    LOG_WARN("BOOT", "WiFi 连接失败，进入配网模式");
     startParallelProvision();
     return;
   }
 
+  LOG_INFO("BOOT", String("WiFi 已连接 IP=" + WiFi.localIP().toString()).c_str());
+
   broadcastIPCached = false;
   setupDeviceHttpServer();
-  beginWebSocketClient();
   sendAnnounce();
+  if (backendDeviceAdded) {
+    LOG_INFO("BOOT", "开始连接 WebSocket");
+    beginWebSocketClient();
+  } else {
+    DEBUG_SERIAL.println("[WS] skip connect until backend announce returns added=true");
+    LOG_INFO("BOOT", "等待后端 announce 确认后再连接 WS");
+  }
 }
 
 void loop() {
@@ -163,8 +197,11 @@ void loop() {
 
   if (!ensureWiFiReady()) return;
 
-  webSocket.loop();
-  handleWsHeartbeat();
+  if (wsClientStarted) {
+    webSocket.loop();
+    handleWsHeartbeat();
+  }
+  handleTrackingReceiver();
 
   if (otaInProgress) return;
 
@@ -189,10 +226,15 @@ void loop() {
   if (now - lastAnnounce > announceInterval) {
     lastAnnounce = now;
     sendAnnounce();
+    if (backendDeviceAdded && !wsClientStarted) {
+      beginWebSocketClient();
+    }
   }
 
   if (now - lastLightSend > lightSendInterval) {
     lastLightSend = now;
     sendLightLevelToServer();
   }
+
+  uploadLogs();
 }
