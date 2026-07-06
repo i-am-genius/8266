@@ -19,7 +19,7 @@ static unsigned long lastUploadMs = 0;
 // ===================== Server Config =====================
 static char logServerHost[64] = "";
 static uint16_t logServerPort = 80;
-static char logUploadSecret[64] = "";
+static char logUploadSecret[64] = "YZCDDT4UC++estDhY0jGOqcWwWmEAcu9KfTqkU08a5s=";
 static char logDeviceId[32] = "";
 
 // ===================== Helper: escape JSON string =====================
@@ -149,7 +149,7 @@ void uploadLogs() {
     int idx = (startIdx + i) % LOG_RING_SIZE;
     LogEntry& e = logRing[idx];
 
-    ndjson += "{\"timestamp\":";
+    ndjson += "{\"ts\":";
     ndjson += String(e.timestampMs);
     ndjson += ",\"level\":\"";
     ndjson += levelToString(e.level);
