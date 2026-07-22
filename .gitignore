@@ -13,6 +13,7 @@ data/config.json
 *.swp
 *~
 .claude/
+.worktrees/
 test/
 lib/
 include/README
