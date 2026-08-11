@@ -1,4 +1,5 @@
 ﻿#include "network/http_reporter.h"
+#include "network/announce_response.h"
 #include "device/self_test.h"
 #include "diagnostics/diagnostic_logger.h"
 
@@ -11,6 +12,10 @@
 // Keep synchronous HTTP calls shorter than the WebSocket pong timeout so they
 // do not starve webSocket.loop() long enough to trigger false disconnects.
 static const uint16_t HTTP_POST_TIMEOUT_MS = 2500;
+
+// Announce runs before the WebSocket client starts, so it can safely wait
+// longer than normal state-report calls for the backend's registration reply.
+static const uint16_t ANNOUNCE_HTTP_TIMEOUT_MS = 8000;
 
 String httpUrl(const String& path) {
   return "http://" + cfg.serverHost + ":" + String(cfg.httpPort) + path;
@@ -255,7 +260,7 @@ void sendAnnounce() {
   WiFiClient client;
   HTTPClient http;
   http.begin(client, httpUrl("/admin/device/announce"));
-  http.setTimeout(HTTP_POST_TIMEOUT_MS);
+  http.setTimeout(ANNOUNCE_HTTP_TIMEOUT_MS);
   http.addHeader("Content-Type", "application/json");
 
   unsigned long startMs = millis();
@@ -267,14 +272,23 @@ void sendAnnounce() {
     DEBUG_SERIAL.printf("[HTTP] announce -> %d (cost=%lu ms)\n", httpCode, costMs);
     DEBUG_SERIAL.println("[HTTP] announce response: " + payload);
 
-    bool added = payload.indexOf("\"added\":true") >= 0 || payload.indexOf("\"added\": true") >= 0;
-    if (added) {
+    bool added = false;
+    AnnounceResponseStatus responseStatus = parseAnnounceAdded(
+      payload.c_str(),
+      payload.length(),
+      added
+    );
+    if (responseStatus == AnnounceResponseStatus::InvalidJson) {
+      DEBUG_SERIAL.println("[HTTP] announce response is invalid JSON");
+    } else if (responseStatus == AnnounceResponseStatus::MissingAdded) {
+      DEBUG_SERIAL.println("[HTTP] announce response missing boolean data.added");
+    } else if (added) {
       backendDeviceAdded = true;
       enableAnnounce = false;
       enableBroadcast = false;
       DEBUG_SERIAL.println("[HTTP] announce 设备已添加，停止 announce/broadcast");
     } else {
-      DEBUG_SERIAL.println("[HTTP] announce 200 but 'added:true' not found in response");
+      DEBUG_SERIAL.println("[HTTP] announce 设备尚未添加或未绑定店铺");
     }
   } else {
     DEBUG_SERIAL.printf("[HTTP] announce failed: %s (cost=%lu ms)\n",
