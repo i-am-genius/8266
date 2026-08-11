@@ -17,3 +17,5 @@ GarmentAimTarget calculateGarmentAimTarget(
   float normalizedCenterY,
   const GarmentAimConfig& config
 );
+
+bool isValidCalibratedGarmentAimPose(float panDeg, float tiltDeg, float sliderMm);

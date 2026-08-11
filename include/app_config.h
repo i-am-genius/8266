@@ -29,8 +29,8 @@
 
 // ===================== 鍥轰欢淇℃伅 =====================
 #define FW_DEVICE_TYPE  "lamp"
-#define FW_VERSION      "1.0.8"
-#define FW_VERSION_CODE 10008
+#define FW_VERSION      "1.0.9"
+#define FW_VERSION_CODE 10009
 #define FW_CHANNEL      "stable"
 
 // ===================== 鍛藉悕甯搁噺 =====================
