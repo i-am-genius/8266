@@ -65,7 +65,7 @@ UART (Nano): `Serial1` (ESP8266 硬件串口), 57600 baud, 发送单字符命令
 | Wave 效果 | `updateEffectLoop()` | 正弦波色温循环, 支持速度/相位/范围调节 |
 | ToF 传感器 | `updateLightingByToF()` | 2m 内人体检测, 1s 防抖, 2s 平滑过渡, 停留时长计算 |
 | BH1750 | `lightMeter.readLightLevel()` | 连续高分辨率模式, 每 30s 上报 |
-| Nano 云台 | `handleArmAction()` | 方向/滑轨控制, Pan -45~45, Tilt -90~90, Slider 0-1200mm |
+| Nano 云台 | `handleArmAction()` | 方向/滑轨控制, Pan -90~90, Tilt -90~90, Slider 0-1200mm |
 | OTA 升级 | `doOtaUpdate()` | 通过 WebSocket 触发, MD5 校验, 进度回调, 自动重启 |
 | 本地 HTTP | ESP8266WebServer (端口 80) | `/status`, `/setLight`, `/stopBroadcast`, `/resumeBroadcast`, `/resetWifi` |
 
