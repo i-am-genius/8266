@@ -175,7 +175,7 @@ E:\8266_OTA\
 |------|------|
 | `sendNano(cmd, value)` | 通过 Serial1 发送单字符命令给 Arduino Nano |
 | `pollNano()` | 读取 Nano 串口响应 |
-| `sendPanTilt()` | 发送云台角度 (限制 ±45° pan, ±90° tilt) |
+| `sendPanTilt()` | 发送云台角度 (限制 ±90° pan, ±90° tilt) |
 | `sendSlider()` | 发送滑轨位置 (0-1200mm) |
 | `applyArmSpeed()` | 设置速度档位 (slow/normal/fast) |
 | `handleArmAction()` | 方向控制: up/down/left/right/center/home/stop/aim_person/aim_cloth |
