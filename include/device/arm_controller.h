@@ -1,8 +1,6 @@
 #pragma once
 #include "app_config.h"
-
-static const int PAN_MIN = -45;
-static const int PAN_MAX = 45;
+#include "device/arm_limits.h"
 static const int TILT_MIN = -90;
 static const int TILT_MAX = 90;
 static const int SLIDER_MIN = 0;
