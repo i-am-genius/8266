@@ -3,6 +3,7 @@
 #include "device/arm_controller.h"
 #include "device/ota_manager.h"
 #include "device/self_test.h"
+#include "device/garment_aim.h"
 #include "network/http_reporter.h"
 #include "online_logger.h"
 #include "diagnostics/diagnostic_logger.h"
@@ -10,6 +11,91 @@
 static const uint32_t WS_HEARTBEAT_PING_INTERVAL_MS = 30000;
 static const uint32_t WS_HEARTBEAT_PONG_TIMEOUT_MS = 10000;
 static const uint8_t WS_HEARTBEAT_DISCONNECT_COUNT = 3;
+
+static bool garmentAimStateInitialized = false;
+static bool garmentAimEnabled = false;
+static bool lastGarmentTargetValid = false;
+static float lastGarmentCenterX = 0.5f;
+static float lastGarmentCenterY = 0.5f;
+
+static void sendGarmentAim(float centerX, float centerY, const char* source) {
+  GarmentAimTarget target = calculateGarmentAimTarget(
+    centerX,
+    centerY,
+    GarmentAimConfig{
+      GARMENT_AIM_DEFAULT_PAN_DEG,
+      GARMENT_AIM_DEFAULT_TILT_DEG,
+      GARMENT_AIM_HORIZONTAL_FOV_DEG,
+      GARMENT_AIM_VERTICAL_FOV_DEG,
+    }
+  );
+
+  stopArmJoystickMotion();
+  panDeg = (int)round(clampPanTargetDeg(target.panDeg));
+  tiltDeg = (int)round(clampTiltTargetDeg(target.tiltDeg));
+  sendPanTarget(target.panDeg);
+  sendTiltTarget(target.tiltDeg);
+  diagnosticRecordArm(DIAG_SOURCE_WS, source, panDeg, tiltDeg, sliderMm);
+  DEBUG_SERIAL.printf(
+    "[GARMENT_AIM] source=%s center=(%.4f,%.4f) pan=%.2f tilt=%.2f\n",
+    source,
+    centerX,
+    centerY,
+    target.panDeg,
+    target.tiltDeg
+  );
+}
+
+static void handleGarmentAimState(JsonObject payload) {
+  if (!payload.containsKey("garmentAimEnabled")) {
+    return;
+  }
+
+  const bool nextEnabled = payload["garmentAimEnabled"] | false;
+  const bool modeChanged = !garmentAimStateInitialized || nextEnabled != garmentAimEnabled;
+  bool targetValid = nextEnabled && (payload["garmentTargetValid"] | false);
+  float centerX = 0.5f;
+  float centerY = 0.5f;
+
+  if (targetValid) {
+    if (!payload.containsKey("garmentCenterX") || !payload.containsKey("garmentCenterY")) {
+      targetValid = false;
+    } else {
+      centerX = payload["garmentCenterX"].as<float>();
+      centerY = payload["garmentCenterY"].as<float>();
+      targetValid = isfinite(centerX) && isfinite(centerY)
+        && centerX >= 0.0f && centerX <= 1.0f
+        && centerY >= 0.0f && centerY <= 1.0f;
+    }
+  }
+
+  const bool targetChanged = targetValid && (
+    !lastGarmentTargetValid
+    || fabs(centerX - lastGarmentCenterX) > 0.0005f
+    || fabs(centerY - lastGarmentCenterY) > 0.0005f
+  );
+
+  if (!nextEnabled) {
+    if (modeChanged || lastGarmentTargetValid) {
+      sendGarmentAim(0.5f, 0.5f, "garment_default");
+    }
+  } else if (targetValid) {
+    if (modeChanged || targetChanged) {
+      sendGarmentAim(centerX, centerY, "garment_detected");
+    }
+  } else if (modeChanged || lastGarmentTargetValid) {
+    sendGarmentAim(0.5f, 0.5f, "garment_fallback_default");
+    DEBUG_SERIAL.println("[GARMENT_AIM] no reliable detected target, using default preset");
+  }
+
+  garmentAimStateInitialized = true;
+  garmentAimEnabled = nextEnabled;
+  lastGarmentTargetValid = targetValid;
+  if (targetValid) {
+    lastGarmentCenterX = centerX;
+    lastGarmentCenterY = centerY;
+  }
+}
 
 void sendWsPing() {
   if (WiFi.status() != WL_CONNECTED || !wsConnected) {
@@ -59,7 +145,7 @@ void sendWsRegister() {
 }
 
 void handleWsMessage(const String& text) {
-  StaticJsonDocument<768> doc;
+  StaticJsonDocument<1024> doc;
   DeserializationError err = deserializeJson(doc, text);
   if (err) {
     DEBUG_SERIAL.println("[WS] JSON解析失败");
@@ -113,6 +199,7 @@ void handleWsMessage(const String& text) {
     }
 
     safeCopyFabric(payload["fabric"]);
+    handleGarmentAimState(payload);
 
     DEBUG_SERIAL.printf("WS控制：亮度=%d 色温=%d 自动=%d 推荐亮度=%d 推荐色温=%d 面料=%s\n",
                   brightness, temp, autoMode,
