@@ -420,8 +420,8 @@ bool handleArmAction(const String& action) {
     tiltDeg = -30;
     sendPanTilt();
   } else if (normalizedAction == "aim_cloth") {
-    panDeg = 0;
-    tiltDeg = 20;
+    panDeg = (int)round(GARMENT_AIM_DEFAULT_PAN_DEG);
+    tiltDeg = (int)round(GARMENT_AIM_DEFAULT_TILT_DEG);
     sendPanTilt();
   } else {
     DEBUG_SERIAL.println("[ARM] unsupported lamp action: " + normalizedAction);
