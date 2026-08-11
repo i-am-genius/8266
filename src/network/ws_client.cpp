@@ -15,8 +15,12 @@ static const uint8_t WS_HEARTBEAT_DISCONNECT_COUNT = 3;
 static bool garmentAimStateInitialized = false;
 static bool garmentAimEnabled = false;
 static bool lastGarmentTargetValid = false;
+static bool lastGarmentCalibrationValid = false;
 static float lastGarmentCenterX = 0.5f;
 static float lastGarmentCenterY = 0.5f;
+static float lastGarmentAimPan = 0.0f;
+static float lastGarmentAimTilt = 20.0f;
+static float lastGarmentAimSlider = 0.0f;
 
 static void sendGarmentAim(float centerX, float centerY, const char* source) {
   GarmentAimTarget target = calculateGarmentAimTarget(
@@ -46,6 +50,29 @@ static void sendGarmentAim(float centerX, float centerY, const char* source) {
   );
 }
 
+static void sendCalibratedGarmentAim(
+  float targetPan,
+  float targetTilt,
+  float targetSlider,
+  const char* source
+) {
+  stopArmJoystickMotion();
+  panDeg = (int)round(clampPanTargetDeg(targetPan));
+  tiltDeg = (int)round(clampTiltTargetDeg(targetTilt));
+  sliderMm = constrain((int)round(targetSlider), SLIDER_MIN, SLIDER_MAX);
+  sendPanTarget((float)panDeg);
+  sendTiltTarget((float)tiltDeg);
+  sendSlider();
+  diagnosticRecordArm(DIAG_SOURCE_WS, source, panDeg, tiltDeg, sliderMm);
+  DEBUG_SERIAL.printf(
+    "[GARMENT_AIM] source=%s calibrated pan=%d tilt=%d slider=%d\n",
+    source,
+    panDeg,
+    tiltDeg,
+    sliderMm
+  );
+}
+
 static void handleGarmentAimState(JsonObject payload) {
   if (!payload.containsKey("garmentAimEnabled")) {
     return;
@@ -56,6 +83,10 @@ static void handleGarmentAimState(JsonObject payload) {
   bool targetValid = nextEnabled && (payload["garmentTargetValid"] | false);
   float centerX = 0.5f;
   float centerY = 0.5f;
+  bool calibrationValid = false;
+  float calibratedPan = 0.0f;
+  float calibratedTilt = 20.0f;
+  float calibratedSlider = 0.0f;
 
   if (targetValid) {
     if (!payload.containsKey("garmentCenterX") || !payload.containsKey("garmentCenterY")) {
@@ -69,10 +100,31 @@ static void handleGarmentAimState(JsonObject payload) {
     }
   }
 
+  if (targetValid && (payload["garmentCalibrationValid"] | false)) {
+    if (payload.containsKey("garmentAimPan")
+        && payload.containsKey("garmentAimTilt")
+        && payload.containsKey("garmentAimSlider")) {
+      calibratedPan = payload["garmentAimPan"].as<float>();
+      calibratedTilt = payload["garmentAimTilt"].as<float>();
+      calibratedSlider = payload["garmentAimSlider"].as<float>();
+      calibrationValid = isValidCalibratedGarmentAimPose(
+        calibratedPan,
+        calibratedTilt,
+        calibratedSlider
+      );
+    }
+  }
+
   const bool targetChanged = targetValid && (
     !lastGarmentTargetValid
+    || calibrationValid != lastGarmentCalibrationValid
     || fabs(centerX - lastGarmentCenterX) > 0.0005f
     || fabs(centerY - lastGarmentCenterY) > 0.0005f
+    || (calibrationValid && (
+      fabs(calibratedPan - lastGarmentAimPan) > 0.05f
+      || fabs(calibratedTilt - lastGarmentAimTilt) > 0.05f
+      || fabs(calibratedSlider - lastGarmentAimSlider) > 0.5f
+    ))
   );
 
   if (!nextEnabled) {
@@ -81,7 +133,16 @@ static void handleGarmentAimState(JsonObject payload) {
     }
   } else if (targetValid) {
     if (modeChanged || targetChanged) {
-      sendGarmentAim(centerX, centerY, "garment_detected");
+      if (calibrationValid) {
+        sendCalibratedGarmentAim(
+          calibratedPan,
+          calibratedTilt,
+          calibratedSlider,
+          "garment_calibrated"
+        );
+      } else {
+        sendGarmentAim(centerX, centerY, "garment_detected");
+      }
     }
   } else if (modeChanged || lastGarmentTargetValid) {
     sendGarmentAim(0.5f, 0.5f, "garment_fallback_default");
@@ -91,9 +152,15 @@ static void handleGarmentAimState(JsonObject payload) {
   garmentAimStateInitialized = true;
   garmentAimEnabled = nextEnabled;
   lastGarmentTargetValid = targetValid;
+  lastGarmentCalibrationValid = targetValid && calibrationValid;
   if (targetValid) {
     lastGarmentCenterX = centerX;
     lastGarmentCenterY = centerY;
+    if (calibrationValid) {
+      lastGarmentAimPan = calibratedPan;
+      lastGarmentAimTilt = calibratedTilt;
+      lastGarmentAimSlider = calibratedSlider;
+    }
   }
 }
 

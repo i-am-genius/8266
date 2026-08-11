@@ -1,4 +1,5 @@
 #include <unity.h>
+#include <cmath>
 
 #include "device/garment_aim.h"
 
@@ -38,10 +39,17 @@ void test_normalized_coordinates_are_clamped() {
   TEST_ASSERT_FLOAT_WITHIN(0.001f, 40.0f, target.tiltDeg);
 }
 
+void test_calibrated_pose_requires_finite_motor_targets() {
+  TEST_ASSERT_TRUE(isValidCalibratedGarmentAimPose(12.0f, -6.0f, 180.0f));
+  TEST_ASSERT_FALSE(isValidCalibratedGarmentAimPose(NAN, -6.0f, 180.0f));
+  TEST_ASSERT_FALSE(isValidCalibratedGarmentAimPose(12.0f, INFINITY, 180.0f));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_center_uses_default_cloth_preset);
   RUN_TEST(test_image_offsets_follow_pan_and_tilt_signs);
   RUN_TEST(test_normalized_coordinates_are_clamped);
+  RUN_TEST(test_calibrated_pose_requires_finite_motor_targets);
   return UNITY_END();
 }
