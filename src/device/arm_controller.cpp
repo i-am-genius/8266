@@ -255,20 +255,20 @@ void applyArmSpeed(const String& speed) {
     sliderStep = 5;
     panSpeedDeg = 4;
     tiltSpeedDeg = 3;
-    sliderSpeedMm = 5;
+    sliderSpeedMm = 30;
   } else if (normalized == "fast") {
     angleStep = 5;
     sliderStep = 20;
-    panSpeedDeg = 15;
-    tiltSpeedDeg = 10;
-    sliderSpeedMm = 30;
+    panSpeedDeg = 20;
+    tiltSpeedDeg = 30;
+    sliderSpeedMm = 80;
   } else {
     // normal
     angleStep = 5;
     sliderStep = 10;
-    panSpeedDeg = 8;
-    tiltSpeedDeg = 5;
-    sliderSpeedMm = 10;
+    panSpeedDeg = 13;
+    tiltSpeedDeg = 20;
+    sliderSpeedMm = 50;
   }
 
   currentArmSpeed = normalized;
