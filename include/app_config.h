@@ -29,8 +29,8 @@
 
 // ===================== 鍥轰欢淇℃伅 =====================
 #define FW_DEVICE_TYPE  "lamp"
-#define FW_VERSION      "1.0.7"
-#define FW_VERSION_CODE 10007
+#define FW_VERSION      "1.0.8"
+#define FW_VERSION_CODE 10008
 #define FW_CHANNEL      "stable"
 
 // ===================== 鍛藉悕甯搁噺 =====================
@@ -44,6 +44,13 @@ const char* const WS_PATH               = "/ws/device";
 const int     LOCATE_MIN_BRIGHTNESS     = 5;
 const int     LOCATE_MAX_BRIGHTNESS     = 100;
 const int     LOCATE_STEPS              = 36;
+
+// Garment-coordinate aiming calibration. The default reuses the existing
+// aim_cloth preset. Tune FOV values after physical camera/lamp calibration.
+const float GARMENT_AIM_DEFAULT_PAN_DEG   = 0.0f;
+const float GARMENT_AIM_DEFAULT_TILT_DEG  = 20.0f;
+const float GARMENT_AIM_HORIZONTAL_FOV_DEG = 60.0f;
+const float GARMENT_AIM_VERTICAL_FOV_DEG   = 45.0f;
 
 // ===================== 榛樿鏈嶅姟鍣ㄩ厤缃?=====================
 const char* const DEFAULT_SERVER_HOST = "device.genius.show";
