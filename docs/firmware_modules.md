@@ -175,7 +175,7 @@ E:\8266_OTA\
 |------|------|
 | `sendNano(cmd, value)` | 通过 Serial1 发送单字符命令给 Arduino Nano |
 | `pollNano()` | 读取 Nano 串口响应 |
-| `sendPanTilt()` | 发送云台角度 (限制 ±90° pan, ±45° tilt) |
+| `sendPanTilt()` | 发送云台角度 (限制 ±45° pan, ±90° tilt) |
 | `sendSlider()` | 发送滑轨位置 (0-1200mm) |
 | `applyArmSpeed()` | 设置速度档位 (slow/normal/fast) |
 | `handleArmAction()` | 方向控制: up/down/left/right/center/home/stop/aim_person/aim_cloth |
@@ -325,3 +325,15 @@ app_config.h (无内部依赖)
 - **OTA** 通过 WebSocket 接收升级通知 → HTTP 下载固件 → MD5 校验 → 自动重启
 - **ToF** 靠近检测驱动自动灯光过渡，离开后上报停留时长
 - **灯光** 冷暖 PWM 输出 + Wave 正弦波灯效 + locate 呼吸定位
+
+## 设备诊断日志
+
+- `BOOT`: reset reason、reset info 和启动堆指标。
+- `HEALTH`: 每 5 分钟记录 uptime、堆、RSSI、重连/失败/丢弃计数和灯光状态。
+- `CONTROL`: 仅记录亮度、色温或自动模式的真实变化。
+- `ARM`: 首个命令开启 60 秒窗口，每个活跃窗口输出一条聚合摘要。
+- `HTTP`: 首次和每第 10 次连续失败告警，恢复时记录一次摘要。
+- `REBOOT`: 所有计划重启先上传包含重启原因的最新日志批次。
+- `SENSOR` / `NANO` / `CONFIG` / `TRACK`: 记录关键失败、恢复和生命周期事件。
+
+高频心跳、传感器正常采样、Nano TX/RX、摇杆包和 tracking 坐标不上传。

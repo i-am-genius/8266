@@ -2,6 +2,7 @@
 #include "network/http_reporter.h"
 #include "network/ws_client.h"
 #include "online_logger.h"
+#include "diagnostics/diagnostic_logger.h"
 
 static void reportOtaStateNow(const char* reason) {
   if (!sendDeviceStateReport(false, reason)) {
@@ -120,7 +121,7 @@ void doOtaUpdate(const String& url, const String& version, int versionCode, cons
       delay(800);
       DEBUG_SERIAL.println("[OTA] 升级成功，设备将自动重启");
       LOG_INFO("OTA", "OTA 成功 即将重启");
-      ESP.restart();
+      diagnosticRestart("ota_success");
       break;
   }
 }

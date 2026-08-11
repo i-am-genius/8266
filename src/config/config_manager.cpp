@@ -1,4 +1,5 @@
 #include "config/config_manager.h"
+#include "diagnostics/diagnostic_logger.h"
 
 String configPath() {
   return "/config.json";
@@ -20,10 +21,14 @@ bool saveConfig(const DeviceConfig& c) {
   doc["wsPort"] = c.wsPort;
 
   File f = LittleFS.open(configPath(), "w");
-  if (!f) return false;
+  if (!f) {
+    diagnosticLogConfig("open for write failed", true);
+    return false;
+  }
 
   if (serializeJson(doc, f) == 0) {
     f.close();
+    diagnosticLogConfig("serialize failed", true);
     return false;
   }
   f.close();
@@ -40,12 +45,18 @@ bool loadConfig() {
   if (!LittleFS.exists(configPath())) return cfg.ssid.length() > 0;
 
   File f = LittleFS.open(configPath(), "r");
-  if (!f) return false;
+  if (!f) {
+    diagnosticLogConfig("open for read failed", true);
+    return false;
+  }
 
   StaticJsonDocument<256> doc;
   DeserializationError err = deserializeJson(doc, f);
   f.close();
-  if (err) return false;
+  if (err) {
+    diagnosticLogConfig("json parse failed", true);
+    return false;
+  }
 
   cfg.ssid = doc["ssid"] | DEFAULT_WIFI_SSID;
   cfg.password = doc["password"] | DEFAULT_WIFI_PASSWORD;
@@ -58,7 +69,9 @@ bool loadConfig() {
 
 void clearConfig() {
   if (LittleFS.exists(configPath())) {
-    LittleFS.remove(configPath());
+    if (!LittleFS.remove(configPath())) {
+      diagnosticLogConfig("remove failed", true);
+    }
   }
 }
 

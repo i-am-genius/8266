@@ -1,55 +1,63 @@
 #include "device/arm_controller.h"
+#include "diagnostics/diagnostic_logger.h"
 
 // Current speed preset.
 String currentArmSpeed = "normal";
 
 // Continuous joystick motion state.
 bool armJoystickActive = false;
-float joystickX = 0.0f;
-float joystickY = 0.0f;
-float panVelocityDegPerSec = 0.0f;
-float tiltVelocityDegPerSec = 0.0f;
 unsigned long joystickExpireAt = 0;
 unsigned long lastArmMotionUpdateAt = 0;
-unsigned long lastNanoPositionSendAt = 0;
 bool nanoLineSeen = false;
 String lastNanoLine = "";
 unsigned long lastNanoRxAt = 0;
 bool lastNanoHomingOk = false;
 bool lastNanoHallStatusOk = false;
+bool nanoEnableStateKnown = false;
+bool nanoEnabled = true;
 
-static const unsigned long JOYSTICK_TARGET_SEND_INTERVAL_MS = 120;
-static const float JOYSTICK_LEAD_SECONDS = 0.6f;
-static const float JOYSTICK_DEADZONE_DEG_PER_SEC = 0.05f;
-static const float JOYSTICK_TARGET_EPS_DEG = 0.8f;
-static const float JOYSTICK_SPEED_EPS_DEG_PER_SEC = 0.25f;
-static const float PAN_MIN_LEAD_DEG = 3.0f;
-static const float TILT_MIN_LEAD_DEG = 2.0f;
-static const float TILT_COMMAND_RATIO = 36.0f / 48.0f;
+static const float JOYSTICK_INPUT_DEADZONE = 0.05f;
+static const float JOYSTICK_STEP_EPS_DEG = 0.02f;
+static const unsigned long JOYSTICK_PACKET_DT_FALLBACK_MS = 120;
+static const unsigned long JOYSTICK_PACKET_DT_MIN_MS = 30;
+static const unsigned long JOYSTICK_PACKET_DT_MAX_MS = 220;
+static const unsigned long JOYSTICK_IDLE_RELEASE_MS = 400;
+static const float TILT_COMMAND_RATIO =30.0f / 48.0f;
 static const unsigned long NANO_STARTUP_SYNC_DELAY_MS = 1800;
 static const unsigned long NANO_STARTUP_SYNC_RETRY_MS = 1200;
 static const uint8_t NANO_STARTUP_SYNC_MAX_ATTEMPTS = 3;
 
 static float panEstimateDeg = 0.0f;
 static float tiltEstimateDeg = 0.0f;
-static float lastSentPanTargetDeg = 10000.0f;
-static float lastSentTiltTargetDeg = 10000.0f;
-static float lastSentPanJoystickSpeed = -1.0f;
-static float lastSentTiltJoystickSpeed = -1.0f;
 static bool nanoStartupSyncScheduled = false;
 static unsigned long nanoStartupSyncScheduledAt = 0;
 static unsigned long nanoStartupSyncLastAttemptAt = 0;
 static uint8_t nanoStartupSyncAttempts = 0;
+static bool nanoStartupStatusRequested = false;
+static unsigned long nanoStartupStatusRequestedAt = 0;
+static bool nanoStartupEnableRecovered = false;
+static bool nanoStartupEnableRecoveryPending = false;
 
-String formatDeg(float value) {
-  return String(value, 2);
+static bool parseNanoEnableStateLine(const String& line, bool& enabledOut) {
+  const char* cstr = line.c_str();
+  const char* marker = strstr(cstr, "Enable state:");
+  if (!marker) {
+    return false;
+  }
+  marker += 13;  // skip "Enable state:"
+  while (*marker == ' ') marker++;  // skip whitespace (inline trim)
+  if (*marker == '\0') {
+    return false;
+  }
+  enabledOut = (*marker != '0');
+  return true;
 }
 
-static float clampPanTargetDeg(float value) {
+float clampPanTargetDeg(float value) {
   return constrain(value, (float)PAN_MIN, (float)PAN_MAX);
 }
 
-static float clampTiltTargetDeg(float value) {
+float clampTiltTargetDeg(float value) {
   return constrain(value, (float)TILT_MIN, (float)TILT_MAX);
 }
 
@@ -57,20 +65,26 @@ static float toTiltNanoCommandDeg(float valueDeg) {
   return clampTiltTargetDeg(valueDeg) * TILT_COMMAND_RATIO;
 }
 
+static void sendNanoFloat(char cmd, float value) {
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%.2f", value);
+  sendNano(cmd, buf);
+}
+
 void sendPanTarget(float valueDeg) {
-  sendNano('p', formatDeg(clampPanTargetDeg(valueDeg)));
+  sendNanoFloat('p', clampPanTargetDeg(valueDeg));
 }
 
 void sendTiltTarget(float valueDeg) {
-  sendNano('t', formatDeg(toTiltNanoCommandDeg(valueDeg)));
+  sendNanoFloat('t', toTiltNanoCommandDeg(valueDeg));
 }
 
 void sendPanSpeed(float valueDegPerSec) {
-  sendNano('s', String(max(0.0f, valueDegPerSec), 2));
+  sendNanoFloat('s', max(0.0f, valueDegPerSec));
 }
 
 void sendTiltSpeed(float valueDegPerSec) {
-  sendNano('S', String(max(0.0f, valueDegPerSec) * TILT_COMMAND_RATIO, 2));
+  sendNanoFloat('S', max(0.0f, valueDegPerSec) * TILT_COMMAND_RATIO);
 }
 
 void scheduleNanoStartupSync() {
@@ -78,6 +92,12 @@ void scheduleNanoStartupSync() {
   nanoStartupSyncScheduledAt = millis();
   nanoStartupSyncLastAttemptAt = 0;
   nanoStartupSyncAttempts = 0;
+  nanoStartupStatusRequested = false;
+  nanoStartupStatusRequestedAt = 0;
+  nanoStartupEnableRecovered = false;
+  nanoStartupEnableRecoveryPending = false;
+  nanoEnableStateKnown = false;
+  nanoEnabled = true;
 }
 
 void handleNanoStartupSync() {
@@ -111,57 +131,22 @@ void handleNanoStartupSync() {
 
   if (nanoStartupSyncAttempts >= NANO_STARTUP_SYNC_MAX_ATTEMPTS) {
     nanoStartupSyncScheduled = false;
+    nanoStartupStatusRequested = true;
+    nanoStartupStatusRequestedAt = now;
+    sendNano('R');
   }
 }
 
-float joystickLeadForVelocity(float velocityDegPerSec, float minLeadDeg) {
-  if (fabs(velocityDegPerSec) <= JOYSTICK_DEADZONE_DEG_PER_SEC) {
-    return 0.0f;
-  }
-
-  float lead = velocityDegPerSec * JOYSTICK_LEAD_SECONDS;
-  if (fabs(lead) < minLeadDeg) {
-    lead = velocityDegPerSec > 0.0f ? minLeadDeg : -minLeadDeg;
-  }
-  return lead;
+static bool joystickAxisActive(float value) {
+  return fabs(value) > JOYSTICK_INPUT_DEADZONE;
 }
 
-void syncJoystickEstimate(unsigned long now) {
-  if (lastArmMotionUpdateAt == 0) {
-    lastArmMotionUpdateAt = now;
-    return;
-  }
-
-  float dt = (now - lastArmMotionUpdateAt) / 1000.0f;
-  lastArmMotionUpdateAt = now;
-
-  if (dt <= 0.0f) {
-    return;
-  }
-  if (dt > 0.2f) {
-    dt = 0.2f;
-  }
-
-  panEstimateDeg += panVelocityDegPerSec * dt;
-  tiltEstimateDeg += tiltVelocityDegPerSec * dt;
-
-  panEstimateDeg = clampPanTargetDeg(panEstimateDeg);
-  tiltEstimateDeg = clampTiltTargetDeg(tiltEstimateDeg);
-
-  panDeg = (int)round(panEstimateDeg);
-  tiltDeg = (int)round(tiltEstimateDeg);
-}
-
-void sendJoystickSpeedIfNeeded(char cmd, float speedDegPerSec, float commandRatio, float& lastSentSpeed) {
-  float speed = fabs(speedDegPerSec);
-  if (speed <= JOYSTICK_DEADZONE_DEG_PER_SEC) {
-    return;
-  }
-
-  if (lastSentSpeed < 0.0f || fabs(speed - lastSentSpeed) >= JOYSTICK_SPEED_EPS_DEG_PER_SEC) {
-    sendNano(cmd, String(speed * commandRatio, 2));
-    lastSentSpeed = speed;
-  }
+static unsigned long clampJoystickPacketDt(unsigned long rawMs) {
+  return (unsigned long)constrain(
+    (long)rawMs,
+    (long)JOYSTICK_PACKET_DT_MIN_MS,
+    (long)JOYSTICK_PACKET_DT_MAX_MS
+  );
 }
 
 void sendNano(char cmd, const String& value) {
@@ -191,6 +176,28 @@ void pollNano() {
         lastNanoRxAt = millis();
         nanoLineSeen = true;
         DEBUG_SERIAL.println("[NANO] RX " + line);
+
+        bool parsedEnabled = true;
+        if (parseNanoEnableStateLine(line, parsedEnabled)) {
+          nanoEnableStateKnown = true;
+          nanoEnabled = parsedEnabled;
+          DEBUG_SERIAL.printf("[NANO] enable=%d\n", nanoEnabled ? 1 : 0);
+
+          if (nanoStartupStatusRequested && !nanoEnabled && !nanoStartupEnableRecovered) {
+            nanoStartupEnableRecovered = true;
+            nanoStartupEnableRecoveryPending = true;
+          }
+        } else if (line == "Enabled") {
+          nanoEnableStateKnown = true;
+          nanoEnabled = true;
+        } else if (line == "Disabled") {
+          nanoEnableStateKnown = true;
+          nanoEnabled = false;
+        }
+
+        if (nanoStartupStatusRequested && nanoEnableStateKnown && nanoEnabled) {
+          nanoStartupStatusRequested = false;
+        }
         line = "";
       }
       continue;
@@ -201,7 +208,28 @@ void pollNano() {
     } else {
       line = "";
       DEBUG_SERIAL.println("[NANO] RX line too long, dropped");
+      diagnosticLogNano("RX line too long", true);
     }
+  }
+
+  if (
+    nanoStartupStatusRequested &&
+    millis() - nanoStartupStatusRequestedAt > 3000 &&
+    !nanoEnableStateKnown
+  ) {
+    DEBUG_SERIAL.println("[NANO] startup status check timed out");
+    diagnosticLogNano("startup status timeout", true);
+    nanoStartupStatusRequested = false;
+  }
+
+  if (nanoStartupEnableRecoveryPending) {
+    nanoStartupEnableRecoveryPending = false;
+    DEBUG_SERIAL.println("[NANO] startup recovery: re-enabling drivers");
+    diagnosticLogNano("re-enabling disabled drivers");
+    sendNano('e');
+    sendNano('m', "16");
+    applyArmSpeed(currentArmSpeed);
+    sendNano('R');
   }
 }
 
@@ -214,7 +242,7 @@ void sendPanTilt() {
 
 void sendSlider() {
   sliderMm = constrain(sliderMm, SLIDER_MIN, SLIDER_MAX);
-  sendNano('x', String((float)sliderMm, 2));
+  sendNanoFloat('x', (float)sliderMm);
 }
 
 void applyArmSpeed(const String& speed) {
@@ -247,7 +275,7 @@ void applyArmSpeed(const String& speed) {
 
   sendPanSpeed((float)panSpeedDeg);
   sendTiltSpeed((float)tiltSpeedDeg);
-  sendNano('X', String((float)sliderSpeedMm, 2));
+  sendNanoFloat('X', (float)sliderSpeedMm);
 }
 
 void getArmJoystickMaxSpeed(float& maxPanSpeed, float& maxTiltSpeed) {
@@ -264,10 +292,9 @@ void getArmJoystickMaxSpeed(float& maxPanSpeed, float& maxTiltSpeed) {
   }
 }
 
-void setArmJoystickMotion(float x, float y, int durationMs) {
+void setArmJoystickMotion(float x, float y) {
   x = constrain(x, -1.0f, 1.0f);
   y = constrain(y, -1.0f, 1.0f);
-  durationMs = constrain(durationMs, 100, 1000);
   unsigned long now = millis();
 
   float maxPanSpeed = 8.0f;
@@ -277,60 +304,67 @@ void setArmJoystickMotion(float x, float y, int durationMs) {
   if (!armJoystickActive) {
     panEstimateDeg = panDeg;
     tiltEstimateDeg = tiltDeg;
-    lastSentPanTargetDeg = panEstimateDeg;
-    lastSentTiltTargetDeg = tiltEstimateDeg;
-    lastSentPanJoystickSpeed = -1.0f;
-    lastSentTiltJoystickSpeed = -1.0f;
-    lastArmMotionUpdateAt = now;
-    lastNanoPositionSendAt = 0;
-  } else {
-    syncJoystickEstimate(now);
   }
 
-  joystickX = x;
-  joystickY = y;
+  float panVel = x * maxPanSpeed;
+  float tiltVel = y * maxTiltSpeed;
 
-  panVelocityDegPerSec = joystickX * maxPanSpeed;
-  tiltVelocityDegPerSec = joystickY * maxTiltSpeed;
-  sendJoystickSpeedIfNeeded('s', panVelocityDegPerSec, 1.0f, lastSentPanJoystickSpeed);
-  sendJoystickSpeedIfNeeded('S', tiltVelocityDegPerSec, TILT_COMMAND_RATIO, lastSentTiltJoystickSpeed);
+  if (!joystickAxisActive(x) && !joystickAxisActive(y)) {
+    stopArmJoystickMotion();
+    DEBUG_SERIAL.println("[ARM] joystick neutral, release control");
+    return;
+  }
+
+  unsigned long dtMs = JOYSTICK_PACKET_DT_FALLBACK_MS;
+  if (lastArmMotionUpdateAt > 0) {
+    dtMs = clampJoystickPacketDt(now - lastArmMotionUpdateAt);
+  }
+
+  float panDeltaDeg = panVel * ((float)dtMs / 1000.0f);
+  float tiltDeltaDeg = tiltVel * ((float)dtMs / 1000.0f);
+  bool sent = false;
+
+  if (fabs(panDeltaDeg) >= JOYSTICK_STEP_EPS_DEG) {
+    panEstimateDeg = clampPanTargetDeg(panEstimateDeg + panDeltaDeg);
+    panDeg = (int)round(panEstimateDeg);
+    sendPanTarget(panEstimateDeg);
+    sent = true;
+  }
+
+  if (fabs(tiltDeltaDeg) >= JOYSTICK_STEP_EPS_DEG) {
+    tiltEstimateDeg = clampTiltTargetDeg(tiltEstimateDeg + tiltDeltaDeg);
+    tiltDeg = (int)round(tiltEstimateDeg);
+    sendTiltTarget(tiltEstimateDeg);
+    sent = true;
+  }
 
   armJoystickActive = true;
-  joystickExpireAt = now + durationMs;
+  lastArmMotionUpdateAt = now;
+  joystickExpireAt = now + JOYSTICK_IDLE_RELEASE_MS;
 
   DEBUG_SERIAL.printf(
-    "[ARM] joystick x=%.2f y=%.2f panVel=%.2f tiltVel=%.2f duration=%d\n",
+    "[ARM] joystick x=%.2f y=%.2f dt=%lu panDelta=%.2f tiltDelta=%.2f sent=%d\n",
     x,
     y,
-    panVelocityDegPerSec,
-    tiltVelocityDegPerSec,
-    durationMs
+    dtMs,
+    panDeltaDeg,
+    tiltDeltaDeg,
+    sent ? 1 : 0
   );
 }
 
 void stopArmJoystickMotion() {
   bool wasActive = armJoystickActive;
 
-  if (wasActive) {
-    syncJoystickEstimate(millis());
-    sendPanTarget(panEstimateDeg);
-    sendTiltTarget(tiltEstimateDeg);
-    sendPanSpeed((float)panSpeedDeg);
-    sendTiltSpeed((float)tiltSpeedDeg);
-  }
-
   armJoystickActive = false;
-  joystickX = 0.0f;
-  joystickY = 0.0f;
-  panVelocityDegPerSec = 0.0f;
-  tiltVelocityDegPerSec = 0.0f;
+  joystickExpireAt = 0;
   lastArmMotionUpdateAt = 0;
-  lastSentPanTargetDeg = panEstimateDeg;
-  lastSentTiltTargetDeg = tiltEstimateDeg;
-  lastSentPanJoystickSpeed = -1.0f;
-  lastSentTiltJoystickSpeed = -1.0f;
+  panEstimateDeg = panDeg;
+  tiltEstimateDeg = tiltDeg;
 
-  DEBUG_SERIAL.println("[ARM] joystick stopped");
+  if (wasActive) {
+    DEBUG_SERIAL.println("[ARM] joystick stopped");
+  }
 }
 
 void updateArmJoystickMotion() {
@@ -338,69 +372,35 @@ void updateArmJoystickMotion() {
     return;
   }
 
-  unsigned long now = millis();
-  syncJoystickEstimate(now);
-
-  // Joystick packets act as a heartbeat; stop if updates stop arriving.
-  if ((long)(now - joystickExpireAt) >= 0) {
+  if (joystickExpireAt > 0 && (long)(millis() - joystickExpireAt) >= 0) {
     stopArmJoystickMotion();
-    DEBUG_SERIAL.println("[ARM] joystick expired, auto stop");
-    return;
-  }
-
-  // Send a lead target, not the estimated current position. Nano keeps chasing
-  // the target ahead of the current estimate, which reduces small stop/start
-  // steps without requiring a Nano protocol change.
-  if (now - lastNanoPositionSendAt >= JOYSTICK_TARGET_SEND_INTERVAL_MS) {
-    bool sent = false;
-
-    float panTargetDeg = panEstimateDeg + joystickLeadForVelocity(panVelocityDegPerSec, PAN_MIN_LEAD_DEG);
-    panTargetDeg = clampPanTargetDeg(panTargetDeg);
-    if (fabs(panTargetDeg - lastSentPanTargetDeg) >= JOYSTICK_TARGET_EPS_DEG) {
-      sendPanTarget(panTargetDeg);
-      lastSentPanTargetDeg = panTargetDeg;
-      sent = true;
-    }
-
-    float tiltTargetDeg = tiltEstimateDeg + joystickLeadForVelocity(tiltVelocityDegPerSec, TILT_MIN_LEAD_DEG);
-    tiltTargetDeg = clampTiltTargetDeg(tiltTargetDeg);
-    if (fabs(tiltTargetDeg - lastSentTiltTargetDeg) >= JOYSTICK_TARGET_EPS_DEG) {
-      sendTiltTarget(tiltTargetDeg);
-      lastSentTiltTargetDeg = tiltTargetDeg;
-      sent = true;
-    }
-
-    if (sent) {
-      lastNanoPositionSendAt = now;
-    }
+    DEBUG_SERIAL.println("[ARM] joystick idle timeout, control released");
   }
 }
 
-void handleArmAction(const String& action) {
+bool handleArmAction(const String& action) {
   String normalizedAction = action;
   normalizedAction.trim();
   normalizedAction.toLowerCase();
 
   if (normalizedAction == "slider_position") {
     DEBUG_SERIAL.println("[ARM] slider_position ignored by lamp firmware");
-    return;
+    return false;
   }
 
+  stopArmJoystickMotion();
+
   if (normalizedAction == "up") {
-    tiltDeg += angleStep;
-    tiltDeg = constrain(tiltDeg, TILT_MIN, TILT_MAX);
+    tiltDeg = (int)clampTiltTargetDeg(tiltDeg + angleStep);
     sendTiltTarget(tiltDeg);
   } else if (normalizedAction == "down") {
-    tiltDeg -= angleStep;
-    tiltDeg = constrain(tiltDeg, TILT_MIN, TILT_MAX);
+    tiltDeg = (int)clampTiltTargetDeg(tiltDeg - angleStep);
     sendTiltTarget(tiltDeg);
   } else if (normalizedAction == "left") {
-    panDeg -= angleStep;
-    panDeg = constrain(panDeg, PAN_MIN, PAN_MAX);
+    panDeg = (int)clampPanTargetDeg(panDeg - angleStep);
     sendPanTarget(panDeg);
   } else if (normalizedAction == "right") {
-    panDeg += angleStep;
-    panDeg = constrain(panDeg, PAN_MIN, PAN_MAX);
+    panDeg = (int)clampPanTargetDeg(panDeg + angleStep);
     sendPanTarget(panDeg);
   } else if (normalizedAction == "center") {
     panDeg = 0;
@@ -408,12 +408,16 @@ void handleArmAction(const String& action) {
     sendPanTilt();
   } else if (normalizedAction == "home") {
     sendNano('A');
+  } else if (normalizedAction == "enable" || normalizedAction == "motor_enable") {
+    sendNano('e');
+  } else if (normalizedAction == "report" || normalizedAction == "status") {
+    sendNano('R');
   } else if (normalizedAction == "stop") {
     DEBUG_SERIAL.println("[ARM] stop: keep current pan/tilt");
     sendPanTilt();
   } else if (normalizedAction == "aim_person") {
     panDeg = 0;
-    tiltDeg = -10;
+    tiltDeg = -30;
     sendPanTilt();
   } else if (normalizedAction == "aim_cloth") {
     panDeg = 0;
@@ -421,7 +425,7 @@ void handleArmAction(const String& action) {
     sendPanTilt();
   } else {
     DEBUG_SERIAL.println("[ARM] unsupported lamp action: " + normalizedAction);
-    return;
+    return false;
   }
 
   DEBUG_SERIAL.printf(
@@ -433,4 +437,5 @@ void handleArmAction(const String& action) {
     angleStep,
     sliderStep
   );
+  return true;
 }

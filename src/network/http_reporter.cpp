@@ -1,11 +1,16 @@
 ﻿#include "network/http_reporter.h"
 #include "device/self_test.h"
+#include "diagnostics/diagnostic_logger.h"
 
 // WS 连接后首次 state-report 延迟 (ms)，0 表示不延迟
 #define STATE_REPORT_FIRST_DELAY_MS 10000
 
 // 两次 state-report 之间的最小间隔 (ms)
 #define STATE_REPORT_COOLDOWN_MS 10000
+
+// Keep synchronous HTTP calls shorter than the WebSocket pong timeout so they
+// do not starve webSocket.loop() long enough to trigger false disconnects.
+static const uint16_t HTTP_POST_TIMEOUT_MS = 2500;
 
 String httpUrl(const String& path) {
   return "http://" + cfg.serverHost + ":" + String(cfg.httpPort) + path;
@@ -17,12 +22,15 @@ static String lastHttpResponseBody = "";
 
 static String summarizeHttpBody(const String& body) {
   const unsigned int maxLen = 180;
-  String value = body;
-  value.replace("\r", "\\r");
-  value.replace("\n", "\\n");
-  if (value.length() > maxLen) {
-    return value.substring(0, maxLen) + "...";
+  String value;
+  value.reserve(min(body.length(), maxLen) + 3);
+  for (unsigned int i = 0; i < body.length() && value.length() < maxLen; i++) {
+    char c = body[i];
+    if (c == '\r') continue;
+    if (c == '\n') { value += "\\n"; continue; }
+    value += c;
   }
+  if (body.length() > maxLen) value += "...";
   return value;
 }
 
@@ -30,6 +38,7 @@ int postJsonToServer(const String& path, const String& jsonBody) {
   WiFiClient client;
   HTTPClient http;
   http.begin(client, httpUrl(path));
+  http.setTimeout(HTTP_POST_TIMEOUT_MS);
   http.addHeader("Content-Type", "application/json");
 
   unsigned long startMs = millis();
@@ -46,6 +55,8 @@ int postJsonToServer(const String& path, const String& jsonBody) {
     DEBUG_SERIAL.printf("[HTTP] POST %s failed: %s (cost=%lu ms)\n",
                         path.c_str(), http.errorToString(httpCode).c_str(), costMs);
   }
+
+  diagnosticRecordHttpResult(path.c_str(), httpCode, costMs);
 
   http.end();
   return httpCode;
@@ -244,6 +255,7 @@ void sendAnnounce() {
   WiFiClient client;
   HTTPClient http;
   http.begin(client, httpUrl("/admin/device/announce"));
+  http.setTimeout(HTTP_POST_TIMEOUT_MS);
   http.addHeader("Content-Type", "application/json");
 
   unsigned long startMs = millis();
@@ -255,7 +267,9 @@ void sendAnnounce() {
     DEBUG_SERIAL.printf("[HTTP] announce -> %d (cost=%lu ms)\n", httpCode, costMs);
     DEBUG_SERIAL.println("[HTTP] announce response: " + payload);
 
-    if (payload.indexOf("\"added\":true") >= 0 || payload.indexOf("\"added\": true") >= 0) {
+    bool added = payload.indexOf("\"added\":true") >= 0 || payload.indexOf("\"added\": true") >= 0;
+    if (added) {
+      backendDeviceAdded = true;
       enableAnnounce = false;
       enableBroadcast = false;
       DEBUG_SERIAL.println("[HTTP] announce 设备已添加，停止 announce/broadcast");
@@ -266,6 +280,8 @@ void sendAnnounce() {
     DEBUG_SERIAL.printf("[HTTP] announce failed: %s (cost=%lu ms)\n",
                         http.errorToString(httpCode).c_str(), costMs);
   }
+
+  diagnosticRecordHttpResult("/admin/device/announce", httpCode, costMs);
 
   http.end();
 }

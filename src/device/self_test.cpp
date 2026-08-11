@@ -3,6 +3,7 @@
 #include "network/http_reporter.h"
 #include "network/ws_client.h"
 #include "online_logger.h"
+#include "diagnostics/diagnostic_logger.h"
 
 static const unsigned long SELFTEST_NANO_HOMING_TIMEOUT_MS = 30000;
 static const unsigned long SELFTEST_NANO_STATUS_TIMEOUT_MS = 2000;
@@ -75,6 +76,9 @@ static void finishSelfTest() {
     LOG_INFO("TEST", selfTestMsg.c_str());
   } else {
     LOG_WARN("TEST", selfTestMsg.c_str());
+    if (!selfTestNanoOk || !lastNanoHomingOk || !lastNanoHallStatusOk) {
+      diagnosticLogNano((String("selftest failed status=") + selfTestNanoStatus).c_str(), true);
+    }
   }
 
   if (!bootSelfTestReportDone) {
@@ -168,6 +172,7 @@ void handleSelfTestTask() {
         if (lastNanoLine.indexOf("Error homing") >= 0) {
           lastNanoHomingOk = false;
           selfTestNanoStatus = lastNanoLine;
+          diagnosticLogNano(lastNanoLine.c_str(), true);
           enterSelfTestState(SELFTEST_DONE);
           return;
         }
@@ -176,6 +181,7 @@ void handleSelfTestTask() {
       if (selfTestStepTimedOut(SELFTEST_NANO_HOMING_TIMEOUT_MS)) {
         lastNanoHomingOk = false;
         selfTestNanoStatus = "no_response";
+        diagnosticLogNano("homing timeout", true);
         enterSelfTestState(SELFTEST_DONE);
       }
       return;
@@ -212,6 +218,7 @@ void handleSelfTestTask() {
       if (selfTestStepTimedOut(SELFTEST_NANO_STATUS_TIMEOUT_MS)) {
         lastNanoHallStatusOk = false;
         selfTestNanoStatus = "hall_no_response";
+        diagnosticLogNano("hall status timeout", true);
         enterSelfTestState(SELFTEST_DONE);
       }
       return;

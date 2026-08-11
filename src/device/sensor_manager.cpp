@@ -1,6 +1,11 @@
 #include "device/sensor_manager.h"
 #include "device/light_control.h"
 #include "network/http_reporter.h"
+#include "network/ws_client.h"
+#include "diagnostics/diagnostic_logger.h"
+
+static ThresholdGate tofReadGate{};
+static ThresholdGate bh1750ReadGate{};
 
 void setupHardwareAndSensors() {
   pinMode(LED_COLD_PIN, OUTPUT);
@@ -14,6 +19,7 @@ void setupHardwareAndSensors() {
 
   if (!lox.begin()) {
     DEBUG_SERIAL.println("VL53L0X 初始化失败");
+    diagnosticLogSensor("VL53L0X init failed", true);
   } else {
     DEBUG_SERIAL.println("VL53L0X 初始化成功");
     tofReady = true;
@@ -24,12 +30,17 @@ void setupHardwareAndSensors() {
     bh1750Ready = true;
   } else {
     DEBUG_SERIAL.println("BH1750 初始化失败");
+    diagnosticLogSensor("BH1750 init failed", true);
   }
 
   udp.begin(udpPort);
 }
 
 void updateLightingByToF() {
+  static String lastClothState = "";
+  static unsigned long lastClothStateReportAt = 0;
+  static int lastClothDistanceMm = -1;
+
   if (!tofReady) {
     int br = autoMode ? recommendedBrightness : brightness;
     int tp = autoMode ? recommendedTemp : temp;
@@ -41,6 +52,12 @@ void updateLightingByToF() {
     if (now - lastLightUpdate > lightUpdateInterval) {
       applyLightSettings(br, tp);
       lastLightUpdate = now;
+    }
+    if (lastClothState != "unknown" || now - lastClothStateReportAt > 30000) {
+      lastClothState = "unknown";
+      lastClothDistanceMm = -1;
+      lastClothStateReportAt = now;
+      sendLampClothState("unknown", false);
     }
     return;
   }
@@ -55,6 +72,17 @@ void updateLightingByToF() {
     return;
   }
 
+  bool tofSampleValid = measure.RangeStatus == 0 && measure.RangeMilliMeter <= TOF_MAX_RANGE_MM;
+  FailureDecision tofDecision = thresholdGateRecord(tofReadGate, tofSampleValid, 20);
+  if (tofDecision == DIAG_LOG_FAILURE) {
+    char message[64];
+    snprintf(message, sizeof(message), "ToF invalid status=%u range=%u",
+             measure.RangeStatus, measure.RangeMilliMeter);
+    diagnosticLogSensor(message, true);
+  } else if (tofDecision == DIAG_LOG_RECOVERY) {
+    diagnosticLogSensor("ToF reads recovered");
+  }
+
   if (measure.RangeMilliMeter > TOF_MAX_RANGE_MM) return;
 
   static bool wasNearby = false;
@@ -63,8 +91,21 @@ void updateLightingByToF() {
   static unsigned long leftStart = 0;
 
   bool currentNearby = (measure.RangeMilliMeter < 2000);
+  const char* clothState = currentNearby ? "taken" : "on_rack";
 
   DEBUG_SERIAL.printf("测距: %d mm\n", measure.RangeMilliMeter);
+
+  // 状态变化立即上报；距离跳变 >80mm 需至少间隔 3s 防抖；10s 心跳保活
+  if (
+    lastClothState != clothState ||
+    (now - lastClothStateReportAt > 3000 && abs((int)measure.RangeMilliMeter - lastClothDistanceMm) > 80) ||
+    now - lastClothStateReportAt > 10000
+  ) {
+    lastClothState = clothState;
+    lastClothDistanceMm = measure.RangeMilliMeter;
+    lastClothStateReportAt = now;
+    sendLampClothState(clothState, false);
+  }
 
   if (autoMode) {
     if (currentNearby && !wasNearby) {
@@ -95,9 +136,18 @@ void updateLightingByToF() {
   static unsigned long lastLuxAutoRead = 0;
   if (autoMode && bh1750Ready && (now - lastLuxAutoRead > 2000)) {
     float lux = lightMeter.readLightLevel();
-    int error = luxAutoTarget - (int)lux;
-    luxAutoBrightness += (int)(error * 0.1f);
-    luxAutoBrightness = constrain(luxAutoBrightness, 5, 100);
+    bool luxValid = isfinite(lux) && lux >= 0.0f;
+    FailureDecision luxDecision = thresholdGateRecord(bh1750ReadGate, luxValid, 3);
+    if (luxDecision == DIAG_LOG_FAILURE) {
+      diagnosticLogSensor("BH1750 invalid reads", true);
+    } else if (luxDecision == DIAG_LOG_RECOVERY) {
+      diagnosticLogSensor("BH1750 reads recovered");
+    }
+    if (luxValid) {
+      int error = luxAutoTarget - (int)lux;
+      luxAutoBrightness += (int)(error * 0.1f);
+      luxAutoBrightness = constrain(luxAutoBrightness, 5, 100);
+    }
     lastLuxAutoRead = now;
   }
 

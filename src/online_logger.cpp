@@ -15,6 +15,7 @@ static LogEntry logRing[LOG_RING_SIZE];
 static int logHead = 0;  // next write position
 static int logCount = 0; // number of entries in buffer
 static unsigned long lastUploadMs = 0;
+static LogTransportPolicy transportPolicy{};
 
 // ===================== Server Config =====================
 static char logServerHost[64] = "";
@@ -54,7 +55,18 @@ void logInit() {
   logHead = 0;
   logCount = 0;
   lastUploadMs = 0;
+  transportPolicy = LogTransportPolicy{};
   DEBUG_SERIAL.println("[LOG] online logger initialized");
+}
+
+static void writeEntryAt(int index, uint8_t level, const char* module, const char* message) {
+  LogEntry& entry = logRing[index];
+  entry.timestampMs = millis();
+  entry.level = level;
+  strncpy(entry.module, module, sizeof(entry.module) - 1);
+  entry.module[sizeof(entry.module) - 1] = '\0';
+  strncpy(entry.message, message, sizeof(entry.message) - 1);
+  entry.message[sizeof(entry.message) - 1] = '\0';
 }
 
 // ===================== Write (printf style) =====================
@@ -70,36 +82,32 @@ void logWrite(uint8_t level, const char* module, const char* fmt, ...) {
 
   DEBUG_SERIAL.println(buf);
 
-  // Write to ring buffer
-  if (logCount < LOG_RING_SIZE) {
-    // Buffer not full, write normally
-    LogEntry& entry = logRing[logHead];
-    entry.timestampMs = millis();
-    entry.level = level;
-    strncpy(entry.module, module, sizeof(entry.module) - 1);
-    entry.module[sizeof(entry.module) - 1] = '\0';
-    strncpy(entry.message, buf, sizeof(entry.message) - 1);
-    entry.message[sizeof(entry.message) - 1] = '\0';
+  uint8_t levels[LOG_RING_SIZE];
+  for (int i = 0; i < LOG_RING_SIZE; i++) {
+    levels[i] = logRing[i].level;
+  }
+
+  LogWriteSlot slot = selectLogWriteSlot(
+    levels,
+    (size_t)logCount,
+    LOG_RING_SIZE,
+    (size_t)logHead,
+    level
+  );
+
+  if (!slot.accept) {
+    recordLogDrop(transportPolicy, level);
+    return;
+  }
+
+  if (slot.replacing) {
+    recordLogDrop(transportPolicy, slot.droppedLevel);
+    writeEntryAt((int)slot.index, level, module, buf);
+  } else {
+    writeEntryAt(logHead, level, module, buf);
     logHead = (logHead + 1) % LOG_RING_SIZE;
     logCount++;
-  } else if (level >= LOG_LEVEL_WARN) {
-    // Buffer full, only replace DEBUG/INFO with WARN/ERROR
-    // Find oldest DEBUG/INFO entry to replace
-    for (int i = 0; i < LOG_RING_SIZE; i++) {
-      int idx = (logHead + i) % LOG_RING_SIZE;
-      if (logRing[idx].level < LOG_LEVEL_WARN) {
-        LogEntry& entry = logRing[idx];
-        entry.timestampMs = millis();
-        entry.level = level;
-        strncpy(entry.module, module, sizeof(entry.module) - 1);
-        entry.module[sizeof(entry.module) - 1] = '\0';
-        strncpy(entry.message, buf, sizeof(entry.message) - 1);
-        entry.message[sizeof(entry.message) - 1] = '\0';
-        break;
-      }
-    }
   }
-  // If buffer full and new log is DEBUG/INFO, discard it
 }
 
 // ===================== Write (String overload) =====================
@@ -125,16 +133,16 @@ void logSetDeviceId(const char* deviceId) {
 }
 
 // ===================== Upload =====================
-void uploadLogs() {
+static bool uploadLogBatch(bool beforeRestart) {
   // Only depend on WiFi, not wsConnected
-  if (WiFi.status() != WL_CONNECTED) return;
-  if (logServerHost[0] == '\0') return;
-  if (logCount == 0) return;
+  if (WiFi.status() != WL_CONNECTED) return false;
+  if (logServerHost[0] == '\0') return false;
+  if (logCount == 0) return true;
 
   unsigned long now = millis();
-  if (now - lastUploadMs < LOG_UPLOAD_INTERVAL_MS) return;
+  if (!beforeRestart && now - lastUploadMs < LOG_UPLOAD_INTERVAL_MS) return false;
 
-  lastUploadMs = now;
+  if (!beforeRestart) lastUploadMs = now;
 
   // Build NDJSON payload
   int batchCount = min((int)logCount, LOG_UPLOAD_BATCH_SIZE);
@@ -142,8 +150,9 @@ void uploadLogs() {
   String ndjson;
   ndjson.reserve(batchCount * 160);
 
-  // Calculate start index (oldest entry in ring)
-  int startIdx = (logHead - logCount + LOG_RING_SIZE) % LOG_RING_SIZE;
+  int startIdx = beforeRestart
+    ? (int)newestLogBatchStart(logHead, logCount, LOG_RING_SIZE, batchCount)
+    : (logHead - logCount + LOG_RING_SIZE) % LOG_RING_SIZE;
 
   for (int i = 0; i < batchCount; i++) {
     int idx = (startIdx + i) % LOG_RING_SIZE;
@@ -179,18 +188,38 @@ void uploadLogs() {
 
   int httpCode = http.POST(ndjson);
   if (httpCode >= 200 && httpCode < 300) {
-    // Success: remove uploaded entries
-    int remaining = logCount - batchCount;
-    if (remaining <= 0) {
-      logHead = 0;
-      logCount = 0;
-    } else {
-      logCount = remaining;
+    recordLogUploadResult(transportPolicy, true, httpCode);
+    if (!beforeRestart) {
+      int remaining = logCount - batchCount;
+      if (remaining <= 0) {
+        logHead = 0;
+        logCount = 0;
+      } else {
+        logCount = remaining;
+      }
     }
     DEBUG_SERIAL.printf("[LOG] uploaded %d entries, code=%d\n", batchCount, httpCode);
   } else {
+    recordLogUploadResult(transportPolicy, false, httpCode);
     DEBUG_SERIAL.printf("[LOG] upload failed code=%d\n", httpCode);
   }
 
   http.end();
+  return httpCode >= 200 && httpCode < 300;
+}
+
+void uploadLogs() {
+  uploadLogBatch(false);
+}
+
+bool uploadLogsBeforeRestart() {
+  return uploadLogBatch(true);
+}
+
+LogTransportStats getLogTransportStats() {
+  return transportPolicy;
+}
+
+bool consumeLogUploadRecovery(uint32_t& failureCount, int& lastCode) {
+  return consumeLogRecovery(transportPolicy, failureCount, lastCode);
 }

@@ -4,8 +4,8 @@
 #include "device/ota_manager.h"
 #include "device/self_test.h"
 #include "network/http_reporter.h"
-#include "network/tracking_receiver.h"
 #include "online_logger.h"
+#include "diagnostics/diagnostic_logger.h"
 
 static const uint32_t WS_HEARTBEAT_PING_INTERVAL_MS = 30000;
 static const uint32_t WS_HEARTBEAT_PONG_TIMEOUT_MS = 10000;
@@ -63,6 +63,7 @@ void handleWsMessage(const String& text) {
   DeserializationError err = deserializeJson(doc, text);
   if (err) {
     DEBUG_SERIAL.println("[WS] JSON解析失败");
+    diagnosticLogWs("json parse failed", true);
     return;
   }
 
@@ -95,6 +96,7 @@ void handleWsMessage(const String& text) {
       return;
     }
 
+    LightState before = diagnosticCurrentLightState();
     stopEffectWaveForManualControl();
     stopLocateBreath(false);
 
@@ -115,6 +117,7 @@ void handleWsMessage(const String& text) {
     DEBUG_SERIAL.printf("WS控制：亮度=%d 色温=%d 自动=%d 推荐亮度=%d 推荐色温=%d 面料=%s\n",
                   brightness, temp, autoMode,
                   recommendedBrightness, recommendedTemp, fabric);
+    diagnosticLogLightChange("ws", before, diagnosticCurrentLightState());
     return;
   }
 
@@ -124,12 +127,14 @@ void handleWsMessage(const String& text) {
 
     if (effect != "wave") {
       DEBUG_SERIAL.println("[EFFECT] unsupported effect: " + effect);
+      diagnosticLogWs("unsupported effect", true);
       return;
     }
 
     stopLocateBreath(false);
 
     if (enabled) {
+      LightState before = diagnosticCurrentLightState();
       effectRestoreBrightness = autoMode ? recommendedBrightness : brightness;
       effectRestoreTemp = autoMode ? recommendedTemp : temp;
       effectBaseTemp = constrain(payload["baseTemp"] | effectBaseTemp, 2700, 6500);
@@ -158,6 +163,7 @@ void handleWsMessage(const String& text) {
       applyLightSettings(brightness, temp);
       lastLightUpdate = millis();
       requestDeviceStateReport("WS_EFFECT_START");
+      diagnosticLogLightChange("effect", before, diagnosticCurrentLightState());
 
       DEBUG_SERIAL.printf(
         "[EFFECT] wave start baseTemp=%d range=%d speed=%.2f brightness=%d phaseOffset=%.2f restoreB=%d restoreT=%d\n",
@@ -201,6 +207,7 @@ void handleWsMessage(const String& text) {
     float y = payload["y"] | 0.0f;
 
     setArmJoystickMotion(x, y);
+    diagnosticRecordArm(DIAG_SOURCE_WS, "joystick", panDeg, tiltDeg, sliderMm);
     return;
   }
 
@@ -235,6 +242,9 @@ void handleWsMessage(const String& text) {
 
     if (!changed) {
       DEBUG_SERIAL.println("[ARM] arm_position missing pan/tilt/slider");
+      diagnosticLogWs("arm_position missing fields", true);
+    } else {
+      diagnosticRecordArm(DIAG_SOURCE_WS, "position", panDeg, tiltDeg, sliderMm);
     }
 
     return;
@@ -250,6 +260,7 @@ void handleWsMessage(const String& text) {
 
     applyArmSpeed(speed);
     DEBUG_SERIAL.println("[ARM] speed changed: " + speed);
+    diagnosticRecordArm(DIAG_SOURCE_WS, "speed", panDeg, tiltDeg, sliderMm);
     return;
   }
 
@@ -264,36 +275,13 @@ void handleWsMessage(const String& text) {
 
     if (action.length() == 0) {
       DEBUG_SERIAL.println("[ARM] missing action");
+      diagnosticLogWs("arm action missing", true);
       return;
     }
 
-    handleArmAction(action);
-    return;
-  }
-
-  if (type == "lampTrackingPrepare") {
-    String targetLamp = payload["lampChipId"] | payload["targetChipId"] | "";
-    if (targetLamp != deviceId) {
-      DEBUG_SERIAL.println("[TRACK] lampTrackingPrepare not for this lamp, ignored");
-      return;
+    if (handleArmAction(action)) {
+      diagnosticRecordArm(DIAG_SOURCE_WS, action.c_str(), panDeg, tiltDeg, sliderMm);
     }
-
-    String camChipId = payload["camChipId"] | "";
-    int targetIndex = payload["targetIndex"] | 1;
-    int udpPortValue = payload["udpPort"] | 4211;
-    int lostTimeoutSeconds = payload["trackingLostTimeoutSeconds"] | 2;
-    prepareLampTracking(camChipId, targetIndex, (uint16_t)udpPortValue, (unsigned long)lostTimeoutSeconds);
-    return;
-  }
-
-  if (type == "lampTrackingStop") {
-    String targetLamp = payload["lampChipId"] | payload["targetChipId"] | "";
-    if (targetLamp.length() > 0 && targetLamp != deviceId) {
-      DEBUG_SERIAL.println("[TRACK] lampTrackingStop not for this lamp, ignored");
-      return;
-    }
-    String reason = payload["reason"] | "server stop";
-    stopLampTracking(reason.c_str());
     return;
   }
 
@@ -311,6 +299,7 @@ void handleWsMessage(const String& text) {
       DEBUG_SERIAL.println("[WS] UDP broadcast resumed");
     } else {
       DEBUG_SERIAL.println("[WS] unknown command: " + cmd);
+      diagnosticLogWs("unknown command", true);
     }
     return;
   }
@@ -329,6 +318,7 @@ void handleWsMessage(const String& text) {
 
     if (version.length() == 0 || url.length() == 0 || versionCode <= 0) {
       DEBUG_SERIAL.println("[OTA] OTA message missing version/url/versionCode");
+      diagnosticLogWs("invalid OTA message", true);
       otaStatus = "failed";
       requestDeviceStateReport("OTA_INVALID");
       return;
@@ -359,6 +349,7 @@ void handleWsMessage(const String& text) {
   }
 
   DEBUG_SERIAL.println("[WS] 未处理消息类型: " + type);
+  diagnosticLogWs((String("unhandled type=") + type).c_str(), true);
 }
 
 void sendLampClothState(const char* clothState, bool tracking, const char* lastTakenAt) {
@@ -389,14 +380,32 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         DEBUG_SERIAL.write(payload, length);
       }
       DEBUG_SERIAL.println();
-      LOG_WARN("WS", "WebSocket 已断开");
+      {
+        char reason[41];
+        size_t reasonLength = min(length, sizeof(reason) - 1);
+        for (size_t i = 0; i < reasonLength; ++i) {
+          char ch = payload ? (char)payload[i] : '\0';
+          reason[i] = (ch >= 32 && ch <= 126) ? ch : '.';
+        }
+        reason[reasonLength] = '\0';
+        char message[96];
+        snprintf(
+          message,
+          sizeof(message),
+          "disconnected up=%lums reason=%s",
+          (unsigned long)(millis() - lastWsConnectedMs),
+          reason
+        );
+        diagnosticLogWs(message, true);
+      }
       break;
 
     case WStype_CONNECTED:
       wsConnected = true;
       lastWsConnectedMs = millis();
+      diagnosticNoteWsConnected();
       DEBUG_SERIAL.printf("[WS] 已连接: %s\n", payload);
-      LOG_INFO("WS", String("WebSocket 已连接 host=" + cfg.serverHost).c_str());
+      diagnosticLogWs((String("connected host=") + cfg.serverHost).c_str());
       sendWsRegister();
       sendWsPing();
       if (!bootOnlineReportDone && !bootOnlineReportRequested) {

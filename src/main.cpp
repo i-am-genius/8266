@@ -10,8 +10,8 @@
 #include "device/self_test.h"
 #include "server/local_server.h"
 #include "network/udp_discovery.h"
-#include "network/tracking_receiver.h"
 #include "online_logger.h"
+#include "diagnostics/diagnostic_logger.h"
 
 // ==================== HTTP 烟雾测试 ====================
 // 启用后固件只做 WiFi + HTTP announce，排除其他所有模块干扰
@@ -38,8 +38,8 @@ bool selfTestTofOk = false;
 bool selfTestNanoOk = false;
 unsigned long selfTestCheckedAtMs = 0;
 String selfTestNanoStatus = "not_run";
-bool selfTestNanoHomingEnabled = true;
-bool selfTestNanoHallReadEnabled = true;
+bool selfTestNanoHomingEnabled = false;
+bool selfTestNanoHallReadEnabled = false;
 bool enableBroadcast = true;
 bool enableAnnounce = true;
 bool backendDeviceAdded = false;
@@ -155,6 +155,7 @@ void setup() {
   const char* logSecret = cfg.uploadSecret.length() > 0 ? cfg.uploadSecret.c_str() : nullptr;
   logSetServer(logHost.c_str(), logPort, logSecret);
   logSetDeviceId(deviceId.c_str());
+  diagnosticInit();
 
   if (hasConfig) {
     DEBUG_SERIAL.println("[BOOT] Saved config found, trying to connect...");
@@ -201,7 +202,6 @@ void loop() {
     webSocket.loop();
     handleWsHeartbeat();
   }
-  handleTrackingReceiver();
 
   if (otaInProgress) return;
 
@@ -236,5 +236,6 @@ void loop() {
     sendLightLevelToServer();
   }
 
+  diagnosticHandlePeriodic();
   uploadLogs();
 }

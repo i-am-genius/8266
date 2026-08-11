@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <cstdarg>
+#include "diagnostics/diagnostic_policy.h"
 
 // ===================== Log Levels =====================
 #define LOG_LEVEL_DEBUG 0
@@ -30,3 +31,8 @@ void logWrite(uint8_t level, const char* module, const String& msg);
 void logSetServer(const char* host, uint16_t port, const char* secret = nullptr);
 void logSetDeviceId(const char* deviceId);
 void uploadLogs();
+bool uploadLogsBeforeRestart();
+
+using LogTransportStats = LogTransportPolicy;
+LogTransportStats getLogTransportStats();
+bool consumeLogUploadRecovery(uint32_t& failureCount, int& lastCode);

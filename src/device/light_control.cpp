@@ -1,4 +1,5 @@
 #include "device/light_control.h"
+#include "diagnostics/diagnostic_logger.h"
 
 enum LocateBreathState {
   LOCATE_IDLE,
@@ -32,8 +33,9 @@ void applyLightSettings(int br, int tp) {
 
 void stopEffectWaveForManualControl() {
   if (!effectWaveEnabled) return;
-  effectWaveEnabled = false;
-  DEBUG_SERIAL.println("[EFFECT] wave stopped by manual control");
+    effectWaveEnabled = false;
+    DEBUG_SERIAL.println("[EFFECT] wave stopped by manual control");
+    diagnosticLogEffect("stopped by manual control");
 }
 
 void startLocateBreath(int times, int cycleMs) {

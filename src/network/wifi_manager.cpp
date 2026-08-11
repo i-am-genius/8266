@@ -1,5 +1,7 @@
 #include "network/wifi_manager.h"
 #include "config/config_manager.h"
+#include "online_logger.h"
+#include "diagnostics/diagnostic_logger.h"
 
 // ---- HTML 配网页面 ----
 
@@ -91,10 +93,14 @@ bool connectWiFi(const String& ssid, const String& password, unsigned long timeo
 
   if (WiFi.status() == WL_CONNECTED) {
     DEBUG_SERIAL.println("[WiFi] 连接成功: " + WiFi.localIP().toString());
+    String msg = "连接成功 SSID=" + ssid + " IP=" + WiFi.localIP().toString();
+    diagnosticLogWifi(msg.c_str());
     return true;
   }
 
   DEBUG_SERIAL.println("[WiFi] 连接失败");
+  String msg = "连接失败 SSID=" + ssid;
+  diagnosticLogWifi(msg.c_str(), true);
   return false;
 }
 
@@ -159,7 +165,7 @@ static void ensureProvisionRoutes() {
 
     server.send(200, "text/html; charset=utf-8", "<h3>保存成功，设备即将重启...</h3>");
     delay(1200);
-    ESP.restart();
+    diagnosticRestart("wifi_config_saved");
   });
 
   server.on("/resetWifi", HTTP_POST, []() {
@@ -167,7 +173,7 @@ static void ensureProvisionRoutes() {
     DEBUG_SERIAL.println("[PROV] Config cleared via AP, restarting...");
     server.send(200, "text/html; charset=utf-8", "<h3>已清除配置，设备即将重启...</h3>");
     delay(1200);
-    ESP.restart();
+    diagnosticRestart("wifi_config_cleared");
   });
 }
 
@@ -229,13 +235,15 @@ void startParallelProvision() {
   smartConfigStartMs = millis();
 
   if (scOk) {
-    DEBUG_SERIAL.println("[PROV] SmartConfig 已启动 (AirKiss, " + String(smartConfigTimeout / 1000) + "s timeout)");
+    DEBUG_SERIAL.println("[PROV] SmartConfig 已启动 (AirKiss, 无限等待)");
     DEBUG_SERIAL.println("[PROV] 等待手机发送 Wi-Fi 凭据...");
     // SmartConfig 等待期间不启动 AP 模式，避免干扰 STA 连接
     ensureProvisionRoutes();
+    diagnosticLogWifi("SmartConfig started");
   } else {
-    DEBUG_SERIAL.println("[PROV] SmartConfig 启动失败，切换到 AP 配网");
-    startAPPortal();
+    DEBUG_SERIAL.println("[PROV] SmartConfig 启动失败，3秒后重试...");
+    delay(3000);
+    diagnosticRestart("smartconfig_start_failed");
   }
 }
 
@@ -310,7 +318,7 @@ void handleProvisioningLoop() {
           WiFi.stopSmartConfig();
           smartConfigActive = false;
           delay(500);
-          ESP.restart();
+          diagnosticRestart("wifi_config_saved");
         } else {
           // ---- 连接失败，详细诊断 ----
           wl_status_t finalStatus = WiFi.status();
@@ -359,8 +367,9 @@ void handleProvisioningLoop() {
           DEBUG_SERIAL.println("[PROV] =============================================");
           DEBUG_SERIAL.println("");
 
-          DEBUG_SERIAL.println("[PROV] 切换到 AP 配网模式...");
-          startAPPortal();
+          DEBUG_SERIAL.println("[PROV] 3秒后重启 SmartConfig...");
+          delay(3000);
+          diagnosticRestart("smartconfig_connect_failed");
         }
         return;
       }
@@ -370,15 +379,9 @@ void handleProvisioningLoop() {
       if (millis() - lastScLog > 15000) {
         lastScLog = millis();
         unsigned long waitedSec = (millis() - smartConfigStartMs) / 1000;
-        DEBUG_SERIAL.println("[PROV] SmartConfig 等待中... (已等待 " + String(waitedSec) + "s/" +
-                             String(smartConfigTimeout / 1000) + "s)");
+        DEBUG_SERIAL.println("[PROV] SmartConfig 等待中... (已等待 " + String(waitedSec) + "s)");
       }
 
-      if (millis() - smartConfigStartMs > smartConfigTimeout) {
-        DEBUG_SERIAL.println("[PROV] SmartConfig 超时 (" + String(smartConfigTimeout / 1000) +
-                             "s)，切换到 AP 配网");
-        startAPPortal();
-      }
     }
   }
 }
@@ -390,13 +393,33 @@ bool ensureWiFiReady() {
 
   broadcastIPCached = false;
 
+  unsigned long reconnectStartedAt = millis();
+  char disconnectMessage[80];
+  snprintf(
+    disconnectMessage,
+    sizeof(disconnectMessage),
+    "disconnected status=%d rssi=%d",
+    (int)WiFi.status(),
+    WiFi.RSSI()
+  );
+  diagnosticLogWifi(disconnectMessage, true);
+
   DEBUG_SERIAL.println("[WiFi] Disconnected, trying saved network...");
   if (connectSavedWiFi()) {
     broadcastIPCached = false;
+    char recoveryMessage[64];
+    snprintf(
+      recoveryMessage,
+      sizeof(recoveryMessage),
+      "recovered after=%lums",
+      millis() - reconnectStartedAt
+    );
+    diagnosticLogWifi(recoveryMessage);
     return true;
   }
 
   DEBUG_SERIAL.println("[WiFi] Saved network failed, starting parallel provisioning...");
+  diagnosticLogWifi("saved network failed; provisioning", true);
   startParallelProvision();
   return false;
 }

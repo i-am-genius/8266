@@ -20,6 +20,8 @@ extern String lastNanoLine;
 extern unsigned long lastNanoRxAt;
 extern bool lastNanoHomingOk;
 extern bool lastNanoHallStatusOk;
+extern bool nanoEnableStateKnown;
+extern bool nanoEnabled;
 
 void sendNano(char cmd, const String& value = "");
 void pollNano();
@@ -32,10 +34,14 @@ void handleNanoStartupSync();
 void sendPanTilt();
 void sendSlider();
 void applyArmSpeed(const String& speed);
-void handleArmAction(const String& action);
+bool handleArmAction(const String& action);
+
+// 边界钳位 (供外部模块使用)
+float clampPanTargetDeg(float value);
+float clampTiltTargetDeg(float value);
 
 // 摇杆连续运动接口
 void getArmJoystickMaxSpeed(float& maxPanSpeed, float& maxTiltSpeed);
-void setArmJoystickMotion(float x, float y, int durationMs);
+void setArmJoystickMotion(float x, float y);
 void stopArmJoystickMotion();
 void updateArmJoystickMotion();
