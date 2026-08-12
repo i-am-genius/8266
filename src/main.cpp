@@ -12,6 +12,7 @@
 #include "network/udp_discovery.h"
 #include "online_logger.h"
 #include "diagnostics/diagnostic_logger.h"
+#include "runtime/loop_policy.h"
 
 // ==================== HTTP 烟雾测试 ====================
 // 启用后固件只做 WiFi + HTTP announce，排除其他所有模块干扰
@@ -208,7 +209,10 @@ void loop() {
   // 摇杆连续运动更新 (每帧)
   updateArmJoystickMotion();
   handleSelfTestTask();
-  handleDeviceStateReportTask();
+  const bool runNonCriticalHttp = shouldRunNonCriticalHttp(effectWaveEnabled);
+  if (runNonCriticalHttp) {
+    handleDeviceStateReportTask();
+  }
   handleLocateBreathTask();
 
   broadcastDevice();
@@ -223,7 +227,7 @@ void loop() {
 
   unsigned long now = millis();
 
-  if (now - lastAnnounce > announceInterval) {
+  if (runNonCriticalHttp && now - lastAnnounce > announceInterval) {
     lastAnnounce = now;
     sendAnnounce();
     if (backendDeviceAdded && !wsClientStarted) {
@@ -231,11 +235,13 @@ void loop() {
     }
   }
 
-  if (now - lastLightSend > lightSendInterval) {
+  if (runNonCriticalHttp && now - lastLightSend > lightSendInterval) {
     lastLightSend = now;
     sendLightLevelToServer();
   }
 
   diagnosticHandlePeriodic();
-  uploadLogs();
+  if (runNonCriticalHttp) {
+    uploadLogs();
+  }
 }
