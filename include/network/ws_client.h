@@ -16,9 +16,9 @@ bool updatePersonTrackingAim(
   bool hasPan,
   float pan,
   bool hasTilt,
-  float tilt,
-  bool hasSlider,
-  float slider
+  float tilt
 );
 void stopPersonTrackingAim();
 bool isPersonTrackingAimActive();
+void getDefaultGarmentAim(float& pan, float& tilt);
+void getDefaultPersonAim(float& pan, float& tilt);

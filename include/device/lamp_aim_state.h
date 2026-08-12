@@ -1,9 +1,7 @@
 #pragma once
 
-constexpr float LAMP_DEFAULT_GARMENT_SLIDER_MM = 0.0f;
 constexpr float LAMP_DEFAULT_PERSON_PAN_DEG = 0.0f;
 constexpr float LAMP_DEFAULT_PERSON_TILT_DEG = -30.0f;
-constexpr float LAMP_DEFAULT_PERSON_SLIDER_MM = 0.0f;
 
 enum class LampAimSource {
   DefaultGarment,
@@ -15,11 +13,10 @@ enum class LampAimSource {
 struct LampAimPose {
   float panDeg;
   float tiltDeg;
-  float sliderMm;
 };
 
-// Two immutable/default targets and two runtime targets. Runtime tracking
-// updates never overwrite either default pose.
+// Two configurable/default targets and two runtime targets. Runtime tracking
+// updates never overwrite either default pose. Slider motion is independent.
 struct LampAimState {
   LampAimPose garment;
   LampAimPose defaultGarment;
@@ -41,6 +38,5 @@ const char* lampAimSourceName(LampAimSource source);
 bool sameLampAimSelection(
   const LampAimSelection& left,
   const LampAimSelection& right,
-  float angleToleranceDeg = 0.05f,
-  float sliderToleranceMm = 0.5f
+  float angleToleranceDeg = 0.05f
 );

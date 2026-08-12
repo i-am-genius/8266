@@ -25,8 +25,13 @@ extern float nanoSliderArrivedTargetMm;
 extern long nanoSliderArrivedPositionSteps;
 extern unsigned long nanoSliderArrivedAt;
 
-void sendNano(char cmd, const String& value = "");
+void sendNano(
+  char cmd,
+  const String& value = "",
+  const String& captureTaskId = ""
+);
 void pollNano();
+void reportPendingNanoSliderArrival();
 void sendPanTarget(float valueDeg);
 void sendTiltTarget(float valueDeg);
 void sendPanSpeed(float valueDegPerSec);

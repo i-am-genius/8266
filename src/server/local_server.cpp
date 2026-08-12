@@ -171,9 +171,7 @@ void handleArmPosition() {
         hasPan,
         hasPan ? doc["pan"].as<float>() : 0.0f,
         hasTilt,
-        hasTilt ? doc["tilt"].as<float>() : 0.0f,
-        hasSlider,
-        hasSlider ? doc["slider"].as<float>() : 0.0f
+        hasTilt ? doc["tilt"].as<float>() : 0.0f
       )) {
     diagnosticRecordArm(DIAG_SOURCE_LOCAL, "person_tracking", panDeg, tiltDeg, sliderMm);
     DEBUG_SERIAL.printf(

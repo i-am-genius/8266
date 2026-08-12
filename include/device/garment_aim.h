@@ -18,4 +18,4 @@ GarmentAimTarget calculateGarmentAimTarget(
   const GarmentAimConfig& config
 );
 
-bool isValidCalibratedGarmentAimPose(float panDeg, float tiltDeg, float sliderMm);
+bool isValidCalibratedGarmentAimPose(float panDeg, float tiltDeg);
