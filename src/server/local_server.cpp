@@ -3,6 +3,7 @@
 #include "device/arm_controller.h"
 #include "config/config_manager.h"
 #include "network/http_reporter.h"
+#include "network/ws_client.h"
 #include "diagnostics/diagnostic_logger.h"
 
 void addCorsHeaders() {
@@ -160,6 +161,28 @@ void handleArmPosition() {
   auto err = deserializeJson(doc, body);
   if (err) {
     server.send(400, "application/json", "{\"error\":\"JSON 解析失败\"}");
+    return;
+  }
+
+  const bool hasPan = doc.containsKey("pan");
+  const bool hasTilt = doc.containsKey("tilt");
+  const bool hasSlider = doc.containsKey("slider");
+  if (isPersonTrackingAimActive() && updatePersonTrackingAim(
+        hasPan,
+        hasPan ? doc["pan"].as<float>() : 0.0f,
+        hasTilt,
+        hasTilt ? doc["tilt"].as<float>() : 0.0f,
+        hasSlider,
+        hasSlider ? doc["slider"].as<float>() : 0.0f
+      )) {
+    diagnosticRecordArm(DIAG_SOURCE_LOCAL, "person_tracking", panDeg, tiltDeg, sliderMm);
+    DEBUG_SERIAL.printf(
+      "[HTTP] person tracking pose pan=%d tilt=%d slider=%d\n",
+      panDeg,
+      tiltDeg,
+      sliderMm
+    );
+    server.send(200, "application/json", "{\"result\":\"OK\",\"source\":\"person_tracking\"}");
     return;
   }
 

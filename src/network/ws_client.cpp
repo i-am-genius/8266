@@ -4,6 +4,7 @@
 #include "device/ota_manager.h"
 #include "device/self_test.h"
 #include "device/garment_aim.h"
+#include "device/lamp_aim_state.h"
 #include "network/http_reporter.h"
 #include "online_logger.h"
 #include "diagnostics/diagnostic_logger.h"
@@ -12,61 +13,71 @@ static const uint32_t WS_HEARTBEAT_PING_INTERVAL_MS = 30000;
 static const uint32_t WS_HEARTBEAT_PONG_TIMEOUT_MS = 10000;
 static const uint8_t WS_HEARTBEAT_DISCONNECT_COUNT = 3;
 
-static bool garmentAimStateInitialized = false;
-static bool garmentAimEnabled = false;
-static bool lastGarmentTargetValid = false;
-static bool lastGarmentCalibrationValid = false;
-static float lastGarmentCenterX = 0.5f;
-static float lastGarmentCenterY = 0.5f;
-static float lastGarmentAimPan = 0.0f;
-static float lastGarmentAimTilt = 20.0f;
-static float lastGarmentAimSlider = 0.0f;
+static LampAimState lampAimState{
+  LampAimPose{
+    GARMENT_AIM_DEFAULT_PAN_DEG,
+    GARMENT_AIM_DEFAULT_TILT_DEG,
+    LAMP_DEFAULT_GARMENT_SLIDER_MM,
+  },
+  LampAimPose{
+    GARMENT_AIM_DEFAULT_PAN_DEG,
+    GARMENT_AIM_DEFAULT_TILT_DEG,
+    LAMP_DEFAULT_GARMENT_SLIDER_MM,
+  },
+  LampAimPose{
+    LAMP_DEFAULT_PERSON_PAN_DEG,
+    LAMP_DEFAULT_PERSON_TILT_DEG,
+    LAMP_DEFAULT_PERSON_SLIDER_MM,
+  },
+  LampAimPose{
+    LAMP_DEFAULT_PERSON_PAN_DEG,
+    LAMP_DEFAULT_PERSON_TILT_DEG,
+    LAMP_DEFAULT_PERSON_SLIDER_MM,
+  },
+  false,
+  false,
+  false,
+  false,
+};
+static bool appliedAimInitialized = false;
+static LampAimSelection lastAppliedAim{
+  LampAimSource::DefaultGarment,
+  LampAimPose{
+    GARMENT_AIM_DEFAULT_PAN_DEG,
+    GARMENT_AIM_DEFAULT_TILT_DEG,
+    LAMP_DEFAULT_GARMENT_SLIDER_MM,
+  },
+};
 
-static void sendGarmentAim(float centerX, float centerY, const char* source) {
-  GarmentAimTarget target = calculateGarmentAimTarget(
-    centerX,
-    centerY,
-    GarmentAimConfig{
-      GARMENT_AIM_DEFAULT_PAN_DEG,
-      GARMENT_AIM_DEFAULT_TILT_DEG,
-      GARMENT_AIM_HORIZONTAL_FOV_DEG,
-      GARMENT_AIM_VERTICAL_FOV_DEG,
-    }
-  );
-
-  stopArmJoystickMotion();
-  panDeg = (int)round(clampPanTargetDeg(target.panDeg));
-  tiltDeg = (int)round(clampTiltTargetDeg(target.tiltDeg));
-  sendPanTarget(target.panDeg);
-  sendTiltTarget(target.tiltDeg);
-  diagnosticRecordArm(DIAG_SOURCE_WS, source, panDeg, tiltDeg, sliderMm);
-  DEBUG_SERIAL.printf(
-    "[GARMENT_AIM] source=%s center=(%.4f,%.4f) pan=%.2f tilt=%.2f\n",
-    source,
-    centerX,
-    centerY,
-    target.panDeg,
-    target.tiltDeg
-  );
+static LampAimPose normalizeLampAimPose(const LampAimPose& pose) {
+  return LampAimPose{
+    clampPanTargetDeg(pose.panDeg),
+    clampTiltTargetDeg(pose.tiltDeg),
+    constrain(pose.sliderMm, (float)SLIDER_MIN, (float)SLIDER_MAX),
+  };
 }
 
-static void sendCalibratedGarmentAim(
-  float targetPan,
-  float targetTilt,
-  float targetSlider,
-  const char* source
-) {
+static void applySelectedLampAim(const char* reason, bool force = false) {
+  LampAimSelection selected = selectLampAim(lampAimState);
+  selected.pose = normalizeLampAimPose(selected.pose);
+  if (!force && appliedAimInitialized && sameLampAimSelection(selected, lastAppliedAim)) {
+    return;
+  }
+
   stopArmJoystickMotion();
-  panDeg = (int)round(clampPanTargetDeg(targetPan));
-  tiltDeg = (int)round(clampTiltTargetDeg(targetTilt));
-  sliderMm = constrain((int)round(targetSlider), SLIDER_MIN, SLIDER_MAX);
+  panDeg = (int)round(selected.pose.panDeg);
+  tiltDeg = (int)round(selected.pose.tiltDeg);
+  sliderMm = (int)round(selected.pose.sliderMm);
   sendPanTarget((float)panDeg);
   sendTiltTarget((float)tiltDeg);
   sendSlider();
-  diagnosticRecordArm(DIAG_SOURCE_WS, source, panDeg, tiltDeg, sliderMm);
+  lastAppliedAim = selected;
+  appliedAimInitialized = true;
+  diagnosticRecordArm(DIAG_SOURCE_WS, lampAimSourceName(selected.source), panDeg, tiltDeg, sliderMm);
   DEBUG_SERIAL.printf(
-    "[GARMENT_AIM] source=%s calibrated pan=%d tilt=%d slider=%d\n",
-    source,
+    "[LAMP_AIM] source=%s reason=%s pan=%d tilt=%d slider=%d\n",
+    lampAimSourceName(selected.source),
+    reason ? reason : "state_changed",
     panDeg,
     tiltDeg,
     sliderMm
@@ -79,7 +90,6 @@ static void handleGarmentAimState(JsonObject payload) {
   }
 
   const bool nextEnabled = payload["garmentAimEnabled"] | false;
-  const bool modeChanged = !garmentAimStateInitialized || nextEnabled != garmentAimEnabled;
   bool targetValid = nextEnabled && (payload["garmentTargetValid"] | false);
   float centerX = 0.5f;
   float centerY = 0.5f;
@@ -115,53 +125,86 @@ static void handleGarmentAimState(JsonObject payload) {
     }
   }
 
-  const bool targetChanged = targetValid && (
-    !lastGarmentTargetValid
-    || calibrationValid != lastGarmentCalibrationValid
-    || fabs(centerX - lastGarmentCenterX) > 0.0005f
-    || fabs(centerY - lastGarmentCenterY) > 0.0005f
-    || (calibrationValid && (
-      fabs(calibratedPan - lastGarmentAimPan) > 0.05f
-      || fabs(calibratedTilt - lastGarmentAimTilt) > 0.05f
-      || fabs(calibratedSlider - lastGarmentAimSlider) > 0.5f
-    ))
-  );
-
-  if (!nextEnabled) {
-    if (modeChanged || lastGarmentTargetValid) {
-      sendGarmentAim(0.5f, 0.5f, "garment_default");
+  lampAimState.garmentTrackingEnabled = nextEnabled;
+  lampAimState.garmentTargetValid = targetValid;
+  if (targetValid) {
+    if (calibrationValid) {
+      lampAimState.garment = LampAimPose{
+        calibratedPan,
+        calibratedTilt,
+        calibratedSlider,
+      };
+    } else {
+      GarmentAimTarget target = calculateGarmentAimTarget(
+        centerX,
+        centerY,
+        GarmentAimConfig{
+          lampAimState.defaultGarment.panDeg,
+          lampAimState.defaultGarment.tiltDeg,
+          GARMENT_AIM_HORIZONTAL_FOV_DEG,
+          GARMENT_AIM_VERTICAL_FOV_DEG,
+        }
+      );
+      lampAimState.garment = LampAimPose{
+        target.panDeg,
+        target.tiltDeg,
+        lampAimState.defaultGarment.sliderMm,
+      };
     }
-  } else if (targetValid) {
-    if (modeChanged || targetChanged) {
-      if (calibrationValid) {
-        sendCalibratedGarmentAim(
-          calibratedPan,
-          calibratedTilt,
-          calibratedSlider,
-          "garment_calibrated"
-        );
-      } else {
-        sendGarmentAim(centerX, centerY, "garment_detected");
-      }
-    }
-  } else if (modeChanged || lastGarmentTargetValid) {
-    sendGarmentAim(0.5f, 0.5f, "garment_fallback_default");
+  } else if (nextEnabled) {
     DEBUG_SERIAL.println("[GARMENT_AIM] no reliable detected target, using default preset");
   }
 
-  garmentAimStateInitialized = true;
-  garmentAimEnabled = nextEnabled;
-  lastGarmentTargetValid = targetValid;
-  lastGarmentCalibrationValid = targetValid && calibrationValid;
-  if (targetValid) {
-    lastGarmentCenterX = centerX;
-    lastGarmentCenterY = centerY;
-    if (calibrationValid) {
-      lastGarmentAimPan = calibratedPan;
-      lastGarmentAimTilt = calibratedTilt;
-      lastGarmentAimSlider = calibratedSlider;
-    }
+  applySelectedLampAim("garment_state");
+}
+
+void startPersonTrackingAim() {
+  lampAimState.personTrackingActive = true;
+  lampAimState.personTargetValid = false;
+  lampAimState.person = lampAimState.defaultPerson;
+  applySelectedLampAim("person_tracking_start", true);
+}
+
+bool updatePersonTrackingAim(
+  bool hasPan,
+  float pan,
+  bool hasTilt,
+  float tilt,
+  bool hasSlider,
+  float slider
+) {
+  if (!lampAimState.personTrackingActive || (!hasPan && !hasTilt && !hasSlider)) {
+    return false;
   }
+  if ((hasPan && !isfinite(pan))
+      || (hasTilt && !isfinite(tilt))
+      || (hasSlider && !isfinite(slider))) {
+    return false;
+  }
+
+  LampAimPose next = lampAimState.personTargetValid
+    ? lampAimState.person
+    : lampAimState.defaultPerson;
+  if (hasPan) next.panDeg = pan;
+  if (hasTilt) next.tiltDeg = tilt;
+  if (hasSlider) next.sliderMm = slider;
+  lampAimState.person = next;
+  lampAimState.personTargetValid = true;
+  applySelectedLampAim("person_tracking_update");
+  return true;
+}
+
+void stopPersonTrackingAim() {
+  if (!lampAimState.personTrackingActive) {
+    return;
+  }
+  lampAimState.personTrackingActive = false;
+  lampAimState.personTargetValid = false;
+  applySelectedLampAim("person_tracking_stop", true);
+}
+
+bool isPersonTrackingAimActive() {
+  return lampAimState.personTrackingActive;
 }
 
 void sendWsPing() {
@@ -367,6 +410,18 @@ void handleWsMessage(const String& text) {
 
   if (type == "arm_stop") {
     stopArmJoystickMotion();
+    return;
+  }
+
+  if (type == "lampTrackingStart") {
+    startPersonTrackingAim();
+    DEBUG_SERIAL.println("[LAMP_AIM] person tracking session started");
+    return;
+  }
+
+  if (type == "lampTrackingStop") {
+    stopPersonTrackingAim();
+    DEBUG_SERIAL.println("[LAMP_AIM] person tracking session stopped; base aim restored");
     return;
   }
 

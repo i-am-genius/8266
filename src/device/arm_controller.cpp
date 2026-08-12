@@ -1,4 +1,5 @@
 #include "device/arm_controller.h"
+#include "device/lamp_aim_state.h"
 #include "diagnostics/diagnostic_logger.h"
 
 // Current speed preset.
@@ -416,13 +417,17 @@ bool handleArmAction(const String& action) {
     DEBUG_SERIAL.println("[ARM] stop: keep current pan/tilt");
     sendPanTilt();
   } else if (normalizedAction == "aim_person") {
-    panDeg = 0;
-    tiltDeg = -30;
+    panDeg = (int)round(LAMP_DEFAULT_PERSON_PAN_DEG);
+    tiltDeg = (int)round(LAMP_DEFAULT_PERSON_TILT_DEG);
+    sliderMm = (int)round(LAMP_DEFAULT_PERSON_SLIDER_MM);
     sendPanTilt();
+    sendSlider();
   } else if (normalizedAction == "aim_cloth") {
     panDeg = (int)round(GARMENT_AIM_DEFAULT_PAN_DEG);
     tiltDeg = (int)round(GARMENT_AIM_DEFAULT_TILT_DEG);
+    sliderMm = (int)round(LAMP_DEFAULT_GARMENT_SLIDER_MM);
     sendPanTilt();
+    sendSlider();
   } else {
     DEBUG_SERIAL.println("[ARM] unsupported lamp action: " + normalizedAction);
     return false;
