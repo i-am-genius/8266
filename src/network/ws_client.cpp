@@ -427,6 +427,17 @@ void handleWsMessage(const String& text) {
 
   if (type == "arm_position") {
     bool changed = false;
+    String source = payload["source"] | "";
+    String captureTaskId = payload["taskId"] | "";
+    source.trim();
+    captureTaskId.trim();
+    const bool captureMotion = source == "camera_capture";
+
+    if (captureMotion && (captureTaskId.length() == 0 || captureTaskId.length() > 64)) {
+      DEBUG_SERIAL.println("[ARM] camera capture motion missing valid taskId");
+      diagnosticLogWs("camera capture motion missing valid taskId", true);
+      return;
+    }
 
     stopArmJoystickMotion();
 
@@ -445,7 +456,11 @@ void handleWsMessage(const String& text) {
     if (payload.containsKey("slider")) {
       sliderMm = payload["slider"].as<int>();
       sliderMm = constrain(sliderMm, SLIDER_MIN, SLIDER_MAX);
-      sendNano('x', String((float)sliderMm, 2));
+      sendNano(
+        'x',
+        String((float)sliderMm, 2),
+        captureMotion ? captureTaskId : String("")
+      );
       changed = true;
     }
 
@@ -617,6 +632,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       diagnosticLogWs((String("connected host=") + cfg.serverHost).c_str());
       sendWsRegister();
       sendWsPing();
+      reportPendingNanoSliderArrival();
       if (!bootOnlineReportDone && !bootOnlineReportRequested) {
         bootOnlineReportRequested = true;
         requestDeviceStateReport("WS_CONNECTED");
