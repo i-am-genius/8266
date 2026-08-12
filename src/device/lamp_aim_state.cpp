@@ -33,11 +33,9 @@ const char* lampAimSourceName(LampAimSource source) {
 bool sameLampAimSelection(
   const LampAimSelection& left,
   const LampAimSelection& right,
-  float angleToleranceDeg,
-  float sliderToleranceMm
+  float angleToleranceDeg
 ) {
   return left.source == right.source
     && std::fabs(left.pose.panDeg - right.pose.panDeg) <= angleToleranceDeg
-    && std::fabs(left.pose.tiltDeg - right.pose.tiltDeg) <= angleToleranceDeg
-    && std::fabs(left.pose.sliderMm - right.pose.sliderMm) <= sliderToleranceMm;
+    && std::fabs(left.pose.tiltDeg - right.pose.tiltDeg) <= angleToleranceDeg;
 }

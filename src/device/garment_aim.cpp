@@ -8,8 +8,8 @@ static float clampNormalized(float value) {
   return value;
 }
 
-bool isValidCalibratedGarmentAimPose(float panDeg, float tiltDeg, float sliderMm) {
-  return std::isfinite(panDeg) && std::isfinite(tiltDeg) && std::isfinite(sliderMm);
+bool isValidCalibratedGarmentAimPose(float panDeg, float tiltDeg) {
+  return std::isfinite(panDeg) && std::isfinite(tiltDeg);
 }
 
 GarmentAimTarget calculateGarmentAimTarget(
