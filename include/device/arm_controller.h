@@ -20,6 +20,10 @@ extern bool lastNanoHomingOk;
 extern bool lastNanoHallStatusOk;
 extern bool nanoEnableStateKnown;
 extern bool nanoEnabled;
+extern bool nanoSliderArrived;
+extern float nanoSliderArrivedTargetMm;
+extern long nanoSliderArrivedPositionSteps;
+extern unsigned long nanoSliderArrivedAt;
 
 void sendNano(char cmd, const String& value = "");
 void pollNano();
