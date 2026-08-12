@@ -16,6 +16,10 @@ bool lastNanoHomingOk = false;
 bool lastNanoHallStatusOk = false;
 bool nanoEnableStateKnown = false;
 bool nanoEnabled = true;
+bool nanoSliderArrived = false;
+float nanoSliderArrivedTargetMm = 0.0f;
+long nanoSliderArrivedPositionSteps = 0;
+unsigned long nanoSliderArrivedAt = 0;
 
 static const float JOYSTICK_INPUT_DEADZONE = 0.05f;
 static const float JOYSTICK_STEP_EPS_DEG = 0.02f;
@@ -151,6 +155,10 @@ static unsigned long clampJoystickPacketDt(unsigned long rawMs) {
 }
 
 void sendNano(char cmd, const String& value) {
+  if (cmd == 'x') {
+    nanoSliderArrived = false;
+  }
+
   nanoSerial.print(cmd);
   if (value.length() > 0) {
     nanoSerial.print(value);
@@ -165,6 +173,77 @@ void sendNano(char cmd, const String& value) {
   DEBUG_SERIAL.println(value);
 }
 
+static bool readNanoField(
+    const String& line,
+    const char* key,
+    String& valueOut) {
+  String marker = String(key) + "=";
+  int start = line.indexOf(marker);
+  if (start < 0) {
+    return false;
+  }
+
+  start += marker.length();
+  int end = line.indexOf(' ', start);
+  if (end < 0) {
+    end = line.length();
+  }
+
+  valueOut = line.substring(start, end);
+  valueOut.trim();
+  return valueOut.length() > 0;
+}
+
+static void reportNanoSliderArrival() {
+  StaticJsonDocument<256> doc;
+  doc["type"] = "sliderStatus";
+  doc["chipId"] = deviceId;
+  doc["status"] = "arrived";
+  doc["targetMm"] = nanoSliderArrivedTargetMm;
+  doc["positionSteps"] = nanoSliderArrivedPositionSteps;
+  doc["uptimeMs"] = nanoSliderArrivedAt;
+
+  if (!wsConnected) {
+    DEBUG_SERIAL.println("[NANO] slider arrival not reported: WS disconnected");
+    diagnosticLogNano("slider arrival not reported: WS disconnected", true);
+    return;
+  }
+
+  String message;
+  serializeJson(doc, message);
+  webSocket.sendTXT(message);
+}
+
+static void handleNanoSliderDoneLine(const String& line) {
+  if (!line.startsWith("SLIDER_DONE ")) {
+    return;
+  }
+
+  String targetText;
+  String positionText;
+  if (
+    !readNanoField(line, "target_mm", targetText) ||
+    !readNanoField(line, "pos_steps", positionText)
+  ) {
+    DEBUG_SERIAL.println("[NANO] malformed SLIDER_DONE");
+    diagnosticLogNano("malformed SLIDER_DONE", true);
+    return;
+  }
+
+  nanoSliderArrivedTargetMm = targetText.toFloat();
+  nanoSliderArrivedPositionSteps = positionText.toInt();
+  nanoSliderArrivedAt = millis();
+  nanoSliderArrived = true;
+
+  DEBUG_SERIAL.println(
+    "[NANO] slider arrived target=" +
+    String(nanoSliderArrivedTargetMm, 2) +
+    " posSteps=" +
+    String(nanoSliderArrivedPositionSteps)
+  );
+  reportNanoSliderArrival();
+}
+
 void pollNano() {
   static String line;
 
@@ -177,6 +256,7 @@ void pollNano() {
         lastNanoRxAt = millis();
         nanoLineSeen = true;
         DEBUG_SERIAL.println("[NANO] RX " + line);
+        handleNanoSliderDoneLine(line);
 
         bool parsedEnabled = true;
         if (parseNanoEnableStateLine(line, parsedEnabled)) {

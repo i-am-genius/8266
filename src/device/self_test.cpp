@@ -192,7 +192,7 @@ void handleSelfTestTask() {
       if (selfTestNanoHallReadEnabled) {
         sendNano('h');
       } else {
-        sendNano('R');
+        sendNano('Q');
       }
       return;
 
@@ -206,10 +206,13 @@ void handleSelfTestTask() {
           return;
         }
 
-        if (!selfTestNanoHallReadEnabled) {
+        if (
+          !selfTestNanoHallReadEnabled &&
+          lastNanoLine.startsWith("NANO_OK ")
+        ) {
           lastNanoCommOk = true;
           lastNanoHallStatusOk = true;
-          selfTestNanoStatus = "hall_disabled";
+          selfTestNanoStatus = lastNanoLine;
           enterSelfTestState(SELFTEST_DONE);
           return;
         }
@@ -217,8 +220,15 @@ void handleSelfTestTask() {
 
       if (selfTestStepTimedOut(SELFTEST_NANO_STATUS_TIMEOUT_MS)) {
         lastNanoHallStatusOk = false;
-        selfTestNanoStatus = "hall_no_response";
-        diagnosticLogNano("hall status timeout", true);
+        selfTestNanoStatus = selfTestNanoHallReadEnabled
+            ? "hall_no_response"
+            : "nano_no_response";
+        diagnosticLogNano(
+          selfTestNanoHallReadEnabled
+              ? "hall status timeout"
+              : "nano status timeout",
+          true
+        );
         enterSelfTestState(SELFTEST_DONE);
       }
       return;
