@@ -8,3 +8,17 @@ void handleWsMessage(const String& text);
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length);
 void beginWebSocketClient();
 void sendLampClothState(const char* clothState, bool tracking, const char* lastTakenAt = "");
+
+// Runtime aim arbitration. Camera HTTP updates are treated as live person
+// targets only while the backend has opened a person-tracking session.
+void startPersonTrackingAim();
+bool updatePersonTrackingAim(
+  bool hasPan,
+  float pan,
+  bool hasTilt,
+  float tilt,
+  bool hasSlider,
+  float slider
+);
+void stopPersonTrackingAim();
+bool isPersonTrackingAimActive();
