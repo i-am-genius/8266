@@ -35,6 +35,7 @@ static LampAimState lampAimState{
   false,
   false,
 };
+static LampAimSyncGate lampAimSyncGate;
 static bool appliedAimInitialized = false;
 static LampAimSelection lastAppliedAim{
   LampAimSource::DefaultGarment,
@@ -126,11 +127,35 @@ static void applySelectedLampAim(const char* reason, bool force = false) {
   );
 }
 
+static void cacheSelectedLampAimWithoutMotion() {
+  LampAimSelection selected = selectLampAim(lampAimState);
+  selected.pose = normalizeLampAimPose(selected.pose);
+  lastAppliedAim = selected;
+  appliedAimInitialized = true;
+  DEBUG_SERIAL.printf(
+    "[LAMP_AIM] initial state cached without motion source=%s pan=%.1f tilt=%.1f\n",
+    lampAimSourceName(selected.source),
+    selected.pose.panDeg,
+    selected.pose.tiltDeg
+  );
+}
+
+static void syncSelectedLampAim(const char* reason) {
+  const LampAimSyncAction syncAction = lampAimSyncGate.onState(
+    lampAimState.garmentTrackingEnabled
+  );
+  if (syncAction == LampAimSyncAction::CacheOnly) {
+    cacheSelectedLampAimWithoutMotion();
+    return;
+  }
+  applySelectedLampAim(reason, syncAction == LampAimSyncAction::ForceApply);
+}
+
 static void handleGarmentAimState(JsonObject payload) {
   const bool defaultsChanged = updateConfiguredDefaultAims(payload);
   if (!payload.containsKey("garmentAimEnabled")) {
     if (defaultsChanged) {
-      applySelectedLampAim("default_aim_changed");
+      syncSelectedLampAim("default_aim_changed");
     }
     return;
   }
@@ -192,7 +217,9 @@ static void handleGarmentAimState(JsonObject payload) {
     DEBUG_SERIAL.println("[GARMENT_AIM] no reliable detected target, using default preset");
   }
 
-  applySelectedLampAim(defaultsChanged ? "garment_state_defaults_changed" : "garment_state");
+  syncSelectedLampAim(
+    defaultsChanged ? "garment_state_defaults_changed" : "garment_state"
+  );
 }
 
 void startPersonTrackingAim() {
