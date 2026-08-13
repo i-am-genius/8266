@@ -103,10 +103,10 @@ int panDeg = 0;
 int tiltDeg = 0;
 int sliderMm = 0;
 int angleStep = 5;
-int sliderStep = 10;
-int panSpeedDeg = 8;
-int tiltSpeedDeg = 5;
-int sliderSpeedMm = 10;
+int sliderStep = 20;
+int panSpeedDeg = 20;
+int tiltSpeedDeg = 30;
+int sliderSpeedMm = 80;
 
 // ===================== 设备配置 =====================
 DeviceConfig cfg;
