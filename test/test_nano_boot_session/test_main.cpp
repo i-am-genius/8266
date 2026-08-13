@@ -254,6 +254,30 @@ void test_shared_status_probe_retries_q_without_duplicate_timeout() {
   TEST_ASSERT_EQUAL_UINT8(3, probe.sendAttempts());
 }
 
+void test_fresh_ready_invalidates_stale_probe_timeout() {
+  NanoBootSession session;
+  NanoStatusProbe probe;
+
+  TEST_ASSERT_TRUE(probe.begin(1000));
+  TEST_ASSERT_TRUE(probe.takeSendRequest(1000, 300, 3));
+  TEST_ASSERT_TRUE(probe.updateTimeout(3000, 2000));
+
+  TEST_ASSERT_FALSE(acceptNanoReadyLine(session, probe, "READY zero=1"));
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(NanoProbeResult::TimedOut),
+    static_cast<int>(probe.result())
+  );
+
+  TEST_ASSERT_TRUE(acceptNanoReadyLine(session, probe, "READY zero=0"));
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(NanoProbeResult::Idle),
+    static_cast<int>(probe.result())
+  );
+  TEST_ASSERT_EQUAL_UINT8(0, probe.sendAttempts());
+  TEST_ASSERT_TRUE(probe.begin(4000));
+  TEST_ASSERT_TRUE(probe.takeSendRequest(4000, 300, 3));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_only_exact_ready_line_starts_boot);
@@ -269,5 +293,6 @@ int main(int, char**) {
   RUN_TEST(test_legacy_q_status_remains_valid_without_new_fields);
   RUN_TEST(test_shared_status_probe_can_only_timeout_once);
   RUN_TEST(test_shared_status_probe_retries_q_without_duplicate_timeout);
+  RUN_TEST(test_fresh_ready_invalidates_stale_probe_timeout);
   return UNITY_END();
 }

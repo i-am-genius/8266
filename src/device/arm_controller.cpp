@@ -417,7 +417,13 @@ static void handleNanoProtocolLine(const String& line) {
     resetNanoStartupSyncTimer();
   }
 
-  if (nanoBootSession.onReadyLine(line.c_str())) {
+  if (acceptNanoReadyLine(
+        nanoBootSession,
+        nanoStatusProbe,
+        line.c_str()
+      )) {
+    nanoStatusSnapshot = NanoStatusSnapshot{};
+    nanoStatusLine = "";
     nanoStartupSyncScheduled = false;
   }
 
