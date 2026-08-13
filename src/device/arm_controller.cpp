@@ -29,9 +29,6 @@ static const unsigned long JOYSTICK_PACKET_DT_MIN_MS = 30;
 static const unsigned long JOYSTICK_PACKET_DT_MAX_MS = 220;
 static const unsigned long JOYSTICK_IDLE_RELEASE_MS = 400;
 static const float TILT_COMMAND_RATIO =30.0f / 48.0f;
-static const unsigned long NANO_STARTUP_SYNC_DELAY_MS = 1800;
-static const unsigned long NANO_STARTUP_SYNC_RETRY_MS = 1200;
-static const uint8_t NANO_STARTUP_SYNC_MAX_ATTEMPTS = 3;
 static const unsigned long NANO_STATUS_PROBE_TIMEOUT_MS = 2000;
 static const unsigned long NANO_STATUS_PROBE_RETRY_MS = 300;
 static const uint8_t NANO_STATUS_PROBE_MAX_ATTEMPTS = 3;
@@ -39,10 +36,6 @@ static const float NANO_BOOT_REFERENCE_TOLERANCE_DEG = 0.25f;
 
 static float panEstimateDeg = 0.0f;
 static float tiltEstimateDeg = 0.0f;
-static bool nanoStartupSyncScheduled = false;
-static unsigned long nanoStartupSyncScheduledAt = 0;
-static unsigned long nanoStartupSyncLastAttemptAt = 0;
-static uint8_t nanoStartupSyncAttempts = 0;
 static bool nanoStartupEnableRecovered = false;
 static bool nanoStartupEnableRecoveryPending = false;
 static NanoBootSession nanoBootSession;
@@ -116,25 +109,6 @@ void sendNanoBootFinish(float garmentPan, float garmentTilt) {
   sendNano('F', String(value));
 }
 
-static void resetNanoStartupSyncTimer() {
-  nanoStartupSyncScheduled = true;
-  nanoStartupSyncScheduledAt = millis();
-  nanoStartupSyncLastAttemptAt = 0;
-  nanoStartupSyncAttempts = 0;
-}
-
-void scheduleNanoStartupSync() {
-  if (nanoBootSession.readySeen()) {
-    nanoStartupSyncScheduled = false;
-    return;
-  }
-  resetNanoStartupSyncTimer();
-  nanoStartupEnableRecovered = false;
-  nanoStartupEnableRecoveryPending = false;
-  nanoEnableStateKnown = false;
-  nanoEnabled = true;
-}
-
 void ensureNanoStatusProbe() {
   const unsigned long now = millis();
   if (nanoStatusProbe.result() == NanoProbeResult::Idle) {
@@ -175,8 +149,8 @@ static void dispatchNanoBootAction() {
   nanoBootSession.markActionSent(action);
   switch (action) {
     case NanoBootAction::SendBoot:
-      DEBUG_SERIAL.println("[NANO] READY accepted; starting boot animation");
-      sendNano('B');
+      // Nano now starts its animation autonomously. Keep the enum branch only
+      // for protocol compatibility; pendingAction() no longer emits it.
       return;
     case NanoBootAction::SendFinish:
       DEBUG_SERIAL.printf(
@@ -222,57 +196,6 @@ void handleNanoStartupSync() {
     sendNano('e');
   }
 
-  if (!nanoStartupSyncScheduled) {
-    return;
-  }
-
-  if (now - nanoStartupSyncScheduledAt < NANO_STARTUP_SYNC_DELAY_MS) {
-    return;
-  }
-
-  if (nanoStatusProbe.result() == NanoProbeResult::Idle) {
-    ensureNanoStatusProbe();
-    return;
-  }
-  if (nanoStatusProbe.result() == NanoProbeResult::Pending) {
-    return;
-  }
-  if (
-    nanoStatusProbe.result() == NanoProbeResult::Ok &&
-    nanoStatusSnapshot.hasBoot
-  ) {
-    nanoStartupSyncScheduled = false;
-    return;
-  }
-
-  if (
-    nanoStartupSyncAttempts > 0 &&
-    now - nanoStartupSyncLastAttemptAt < NANO_STARTUP_SYNC_RETRY_MS
-  ) {
-    return;
-  }
-
-  nanoStartupSyncAttempts++;
-  nanoStartupSyncLastAttemptAt = now;
-
-  DEBUG_SERIAL.printf(
-    "[NANO] startup sync %u/%u\n",
-    nanoStartupSyncAttempts,
-    NANO_STARTUP_SYNC_MAX_ATTEMPTS
-  );
-
-  sendNano('m', "16");
-  applyArmSpeed(currentArmSpeed);
-
-  if (nanoBootSession.readySeen()) {
-    nanoStartupSyncScheduled = false;
-    dispatchNanoBootAction();
-    return;
-  }
-
-  if (nanoStartupSyncAttempts >= NANO_STARTUP_SYNC_MAX_ATTEMPTS) {
-    nanoStartupSyncScheduled = false;
-  }
 }
 
 static bool joystickAxisActive(float value) {
@@ -414,7 +337,7 @@ static void handleNanoProtocolLine(const String& line) {
     nanoEnabled = true;
     nanoStartupEnableRecovered = false;
     nanoStartupEnableRecoveryPending = false;
-    resetNanoStartupSyncTimer();
+    // Nano starts its own animation. Do not wait for READY/Q/B before sending F.
   }
 
   if (acceptNanoReadyLine(
@@ -424,7 +347,6 @@ static void handleNanoProtocolLine(const String& line) {
       )) {
     nanoStatusSnapshot = NanoStatusSnapshot{};
     nanoStatusLine = "";
-    nanoStartupSyncScheduled = false;
   }
 
   const NanoBootReply bootReply = nanoBootSession.onBootReply(line.c_str());
@@ -455,7 +377,6 @@ static void handleNanoProtocolLine(const String& line) {
         NANO_BOOT_REFERENCE_TOLERANCE_DEG
       );
       nanoBootSession.noteNanoBootState(nanoStatusSnapshot.boot);
-      nanoStartupSyncScheduled = false;
       if (recoveredReady) {
         DEBUG_SERIAL.println(
           "[NANO] recovered missed READY from safe Q status"

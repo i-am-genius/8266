@@ -186,10 +186,7 @@ NanoBootAction NanoBootSession::pendingAction() const {
   if (otaCancelled_) {
     return NanoBootAction::None;
   }
-  if (readySeen_ && !bootRequested_ && !bootRejected_) {
-    return NanoBootAction::SendBoot;
-  }
-  if (startupAimReady_ && bootAccepted_ && !finishSent_) {
+  if (startupAimReady_ && !finishSent_) {
     return NanoBootAction::SendFinish;
   }
   return NanoBootAction::None;

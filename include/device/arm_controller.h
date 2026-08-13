@@ -5,7 +5,7 @@
 static const int TILT_MIN = -90;
 static const int TILT_MAX = 90;
 static const int SLIDER_MIN = 0;
-static const int SLIDER_MAX = 1200;
+static const int SLIDER_MAX = 2500;
 
 // 当前速度档位（applyArmSpeed 设置）
 extern String currentArmSpeed;
@@ -38,7 +38,6 @@ void sendTiltTarget(float valueDeg);
 void sendPanSpeed(float valueDegPerSec);
 void sendTiltSpeed(float valueDegPerSec);
 void sendNanoBootFinish(float garmentPan, float garmentTilt);
-void scheduleNanoStartupSync();
 void handleNanoStartupSync();
 void markNanoStartupAimReady(float garmentPan, float garmentTilt);
 void ensureNanoStatusProbe();

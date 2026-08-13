@@ -130,8 +130,7 @@ void setup() {
 
   LOG_INFO("BOOT", String("设备启动 ID=" + deviceId + " FW=" + String(FW_VERSION)).c_str());
 
-  // 先消费 Nano 一次性的 READY，让开场动画与后续初始化、联网并行。
-  scheduleNanoStartupSync();
+  // Nano 自主播放开机动画；8266 初始化完成并收到后端默认服装位置后直接发送 F。
   pollNano();
   handleNanoStartupSync();
 
