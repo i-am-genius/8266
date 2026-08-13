@@ -98,6 +98,12 @@ class NanoStatusProbe {
   uint8_t sendAttempts_ = 0;
 };
 
+bool acceptNanoReadyLine(
+  NanoBootSession& bootSession,
+  NanoStatusProbe& statusProbe,
+  const char* line
+);
+
 float nanoBootPanCommand(float garmentPanDeg);
 float nanoBootTiltCommand(float garmentTiltDeg);
 bool parseNanoStatusLine(const char* line, NanoStatusSnapshot& status);
