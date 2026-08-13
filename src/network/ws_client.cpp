@@ -1,4 +1,5 @@
 #include "network/ws_client.h"
+#include "network/arm_position_policy.h"
 #include "device/light_control.h"
 #include "device/arm_controller.h"
 #include "device/ota_manager.h"
@@ -501,11 +502,11 @@ void handleWsMessage(const String& text) {
     String captureTaskId = payload["taskId"] | "";
     source.trim();
     captureTaskId.trim();
-    const bool captureMotion = source == "camera_capture";
+    const bool trackedSliderMotion = armPositionSourceRequiresArrivalTaskId(source.c_str());
 
-    if (captureMotion && (captureTaskId.length() == 0 || captureTaskId.length() > 64)) {
-      DEBUG_SERIAL.println("[ARM] camera capture motion missing valid taskId");
-      diagnosticLogWs("camera capture motion missing valid taskId", true);
+    if (trackedSliderMotion && (captureTaskId.length() == 0 || captureTaskId.length() > 64)) {
+      DEBUG_SERIAL.println("[ARM] tracked slider motion missing valid taskId");
+      diagnosticLogWs("tracked slider motion missing valid taskId", true);
       return;
     }
 
@@ -529,7 +530,7 @@ void handleWsMessage(const String& text) {
       sendNano(
         'x',
         String((float)sliderMm, 2),
-        captureMotion ? captureTaskId : String("")
+        trackedSliderMotion ? captureTaskId : String("")
       );
       changed = true;
     }
