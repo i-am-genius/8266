@@ -363,24 +363,24 @@ void applyArmSpeed(const String& speed) {
   normalized.toLowerCase();
 
   if (normalized == "slow") {
-    angleStep = 2;
-    sliderStep = 5;
-    panSpeedDeg = 4;
-    tiltSpeedDeg = 3;
-    sliderSpeedMm = 30;
-  } else if (normalized == "fast") {
-    angleStep = 5;
-    sliderStep = 20;
-    panSpeedDeg = 20;
-    tiltSpeedDeg = 30;
-    sliderSpeedMm = 80;
-  } else {
-    // normal
     angleStep = 5;
     sliderStep = 10;
     panSpeedDeg = 13;
     tiltSpeedDeg = 20;
     sliderSpeedMm = 50;
+  } else if (normalized == "fast") {
+    angleStep = 8;
+    sliderStep = 30;
+    panSpeedDeg = 30;
+    tiltSpeedDeg = 45;
+    sliderSpeedMm = 120;
+  } else {
+    // normal (原 fast 档)
+    angleStep = 5;
+    sliderStep = 20;
+    panSpeedDeg = 20;
+    tiltSpeedDeg = 30;
+    sliderSpeedMm = 80;
   }
 
   currentArmSpeed = normalized;
@@ -392,15 +392,15 @@ void applyArmSpeed(const String& speed) {
 
 void getArmJoystickMaxSpeed(float& maxPanSpeed, float& maxTiltSpeed) {
   if (currentArmSpeed == "slow") {
-    maxPanSpeed = 4.0f;
-    maxTiltSpeed = 3.0f;
-  } else if (currentArmSpeed == "fast") {
-    maxPanSpeed = 15.0f;
-    maxTiltSpeed = 10.0f;
-  } else {
-    // normal
     maxPanSpeed = 8.0f;
     maxTiltSpeed = 5.0f;
+  } else if (currentArmSpeed == "fast") {
+    maxPanSpeed = 22.0f;
+    maxTiltSpeed = 15.0f;
+  } else {
+    // normal (原 fast 档)
+    maxPanSpeed = 15.0f;
+    maxTiltSpeed = 10.0f;
   }
 }
 
