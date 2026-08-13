@@ -149,6 +149,43 @@ void test_q_boot_state_recovers_warm_esp_restart() {
   );
 }
 
+void test_q_idle_reference_recovers_missed_ready() {
+  NanoBootSession session;
+  NanoStatusSnapshot status{};
+
+  TEST_ASSERT_TRUE(parseNanoStatusLine(
+    "NANO_OK v=2 en=1 moving=0 slider_steps=0 boot=IDLE "
+    "pan=0.10 tilt=-0.20 timeout=0",
+    status
+  ));
+  TEST_ASSERT_TRUE(session.recoverReadyFromStatus(status, 0.25f));
+  TEST_ASSERT_TRUE(session.readySeen());
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(NanoBootAction::SendBoot),
+    static_cast<int>(session.pendingAction())
+  );
+}
+
+void test_q_idle_recovery_rejects_motion_or_non_reference_pose() {
+  NanoBootSession movingSession;
+  NanoStatusSnapshot moving{};
+  TEST_ASSERT_TRUE(parseNanoStatusLine(
+    "NANO_OK v=2 en=1 moving=1 slider_steps=0 boot=IDLE "
+    "pan=0.00 tilt=0.00 timeout=0",
+    moving
+  ));
+  TEST_ASSERT_FALSE(movingSession.recoverReadyFromStatus(moving, 0.25f));
+
+  NanoBootSession displacedSession;
+  NanoStatusSnapshot displaced{};
+  TEST_ASSERT_TRUE(parseNanoStatusLine(
+    "NANO_OK v=2 en=1 moving=0 slider_steps=0 boot=IDLE "
+    "pan=0.26 tilt=0.00 timeout=0",
+    displaced
+  ));
+  TEST_ASSERT_FALSE(displacedSession.recoverReadyFromStatus(displaced, 0.25f));
+}
+
 void test_q_status_fields_are_parsed_by_name_in_any_order() {
   NanoStatusSnapshot status{};
 
@@ -201,6 +238,22 @@ void test_shared_status_probe_can_only_timeout_once() {
   );
 }
 
+void test_shared_status_probe_retries_q_without_duplicate_timeout() {
+  NanoStatusProbe probe;
+
+  TEST_ASSERT_TRUE(probe.begin(1000));
+  TEST_ASSERT_TRUE(probe.takeSendRequest(1000, 300, 3));
+  TEST_ASSERT_FALSE(probe.takeSendRequest(1299, 300, 3));
+  TEST_ASSERT_TRUE(probe.takeSendRequest(1300, 300, 3));
+  TEST_ASSERT_TRUE(probe.takeSendRequest(1600, 300, 3));
+  TEST_ASSERT_FALSE(probe.takeSendRequest(1900, 300, 3));
+  TEST_ASSERT_FALSE(probe.updateTimeout(2999, 2000));
+  TEST_ASSERT_TRUE(probe.updateTimeout(3000, 2000));
+  TEST_ASSERT_FALSE(probe.updateTimeout(5000, 2000));
+  TEST_ASSERT_FALSE(probe.takeSendRequest(5000, 300, 3));
+  TEST_ASSERT_EQUAL_UINT8(3, probe.sendAttempts());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_only_exact_ready_line_starts_boot);
@@ -210,8 +263,11 @@ int main(int, char**) {
   RUN_TEST(test_finish_uses_existing_tilt_calibration_and_nano_bounds);
   RUN_TEST(test_ota_cancel_is_once_only_and_suppresses_late_finish);
   RUN_TEST(test_q_boot_state_recovers_warm_esp_restart);
+  RUN_TEST(test_q_idle_reference_recovers_missed_ready);
+  RUN_TEST(test_q_idle_recovery_rejects_motion_or_non_reference_pose);
   RUN_TEST(test_q_status_fields_are_parsed_by_name_in_any_order);
   RUN_TEST(test_legacy_q_status_remains_valid_without_new_fields);
   RUN_TEST(test_shared_status_probe_can_only_timeout_once);
+  RUN_TEST(test_shared_status_probe_retries_q_without_duplicate_timeout);
   return UNITY_END();
 }

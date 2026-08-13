@@ -144,6 +144,23 @@ void NanoBootSession::noteNanoBootState(const char* state) {
   }
 }
 
+bool NanoBootSession::recoverReadyFromStatus(
+  const NanoStatusSnapshot& status,
+  float referenceToleranceDeg
+) {
+  if (!status.hasBoot || !matches(status.boot, "IDLE")
+      || !status.hasMoving || status.moving
+      || !status.hasPan || !status.hasTilt
+      || (status.hasTimeout && status.timedOut)
+      || referenceToleranceDeg < 0.0f
+      || std::fabs(status.pan) > referenceToleranceDeg
+      || std::fabs(status.tilt) > referenceToleranceDeg) {
+    return false;
+  }
+  readySeen_ = true;
+  return true;
+}
+
 void NanoBootSession::markStartupAimReady() {
   startupAimReady_ = true;
 }
@@ -224,6 +241,26 @@ bool NanoStatusProbe::begin(uint32_t nowMs) {
   }
   result_ = NanoProbeResult::Pending;
   startedAtMs_ = nowMs;
+  lastSentAtMs_ = 0;
+  sendAttempts_ = 0;
+  return true;
+}
+
+bool NanoStatusProbe::takeSendRequest(
+  uint32_t nowMs,
+  uint32_t retryIntervalMs,
+  uint8_t maxAttempts
+) {
+  if (result_ != NanoProbeResult::Pending
+      || maxAttempts == 0
+      || sendAttempts_ >= maxAttempts) {
+    return false;
+  }
+  if (sendAttempts_ > 0 && nowMs - lastSentAtMs_ < retryIntervalMs) {
+    return false;
+  }
+  lastSentAtMs_ = nowMs;
+  ++sendAttempts_;
   return true;
 }
 
@@ -236,6 +273,8 @@ void NanoStatusProbe::succeed() {
 void NanoStatusProbe::reset() {
   result_ = NanoProbeResult::Idle;
   startedAtMs_ = 0;
+  lastSentAtMs_ = 0;
+  sendAttempts_ = 0;
 }
 
 bool NanoStatusProbe::updateTimeout(uint32_t nowMs, uint32_t timeoutMs) {
@@ -251,6 +290,10 @@ bool NanoStatusProbe::updateTimeout(uint32_t nowMs, uint32_t timeoutMs) {
 
 NanoProbeResult NanoStatusProbe::result() const {
   return result_;
+}
+
+uint8_t NanoStatusProbe::sendAttempts() const {
+  return sendAttempts_;
 }
 
 float nanoBootPanCommand(float garmentPanDeg) {

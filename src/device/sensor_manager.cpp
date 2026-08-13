@@ -6,6 +6,12 @@
 
 static ThresholdGate tofReadGate{};
 static ThresholdGate bh1750ReadGate{};
+static const uint8_t BH1750_I2C_ADDRESS = 0x23;
+
+static bool i2cDeviceResponds(uint8_t address) {
+  Wire.beginTransmission(address);
+  return Wire.endTransmission() == 0;
+}
 
 void setupHardwareAndSensors() {
   pinMode(LED_COLD_PIN, OUTPUT);
@@ -25,7 +31,12 @@ void setupHardwareAndSensors() {
     tofReady = true;
   }
 
-  if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
+  // BH1750 库会把 NACK 错误直接打印到 Serial；Serial 是 Nano 协议口。
+  // 先用 Wire 静默探测，设备缺失时不进入会污染串口的库调用。
+  if (!i2cDeviceResponds(BH1750_I2C_ADDRESS)) {
+    DEBUG_SERIAL.println("BH1750 初始化失败");
+    diagnosticLogSensor("BH1750 not found", true);
+  } else if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
     DEBUG_SERIAL.println("BH1750 初始化成功");
     bh1750Ready = true;
   } else {

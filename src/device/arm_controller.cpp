@@ -33,6 +33,9 @@ static const unsigned long NANO_STARTUP_SYNC_DELAY_MS = 1800;
 static const unsigned long NANO_STARTUP_SYNC_RETRY_MS = 1200;
 static const uint8_t NANO_STARTUP_SYNC_MAX_ATTEMPTS = 3;
 static const unsigned long NANO_STATUS_PROBE_TIMEOUT_MS = 2000;
+static const unsigned long NANO_STATUS_PROBE_RETRY_MS = 300;
+static const uint8_t NANO_STATUS_PROBE_MAX_ATTEMPTS = 3;
+static const float NANO_BOOT_REFERENCE_TOLERANCE_DEG = 0.25f;
 
 static float panEstimateDeg = 0.0f;
 static float tiltEstimateDeg = 0.0f;
@@ -133,13 +136,17 @@ void scheduleNanoStartupSync() {
 }
 
 void ensureNanoStatusProbe() {
-  if (nanoStatusProbe.result() != NanoProbeResult::Idle) {
-    return;
+  const unsigned long now = millis();
+  if (nanoStatusProbe.result() == NanoProbeResult::Idle) {
+    nanoStatusProbe.begin(now);
   }
-  if (!nanoStatusProbe.begin(millis())) {
-    return;
+  if (nanoStatusProbe.takeSendRequest(
+        now,
+        NANO_STATUS_PROBE_RETRY_MS,
+        NANO_STATUS_PROBE_MAX_ATTEMPTS
+      )) {
+    sendNano('Q');
   }
-  sendNano('Q');
 }
 
 NanoProbeResult getNanoStatusProbeResult() {
@@ -198,9 +205,12 @@ void resumeNanoAfterOtaFailure() {
 }
 
 void handleNanoStartupSync() {
-  if (nanoStatusProbe.updateTimeout(millis(), NANO_STATUS_PROBE_TIMEOUT_MS)) {
+  const unsigned long now = millis();
+  if (nanoStatusProbe.updateTimeout(now, NANO_STATUS_PROBE_TIMEOUT_MS)) {
     DEBUG_SERIAL.println("[NANO] nano status timeout");
     diagnosticLogNano("nano status timeout", true);
+  } else if (nanoStatusProbe.result() == NanoProbeResult::Pending) {
+    ensureNanoStatusProbe();
   }
 
   dispatchNanoBootAction();
@@ -216,7 +226,6 @@ void handleNanoStartupSync() {
     return;
   }
 
-  unsigned long now = millis();
   if (now - nanoStartupSyncScheduledAt < NANO_STARTUP_SYNC_DELAY_MS) {
     return;
   }
@@ -435,8 +444,17 @@ static void handleNanoProtocolLine(const String& line) {
       }
     }
     if (nanoStatusSnapshot.hasBoot) {
+      const bool recoveredReady = nanoBootSession.recoverReadyFromStatus(
+        nanoStatusSnapshot,
+        NANO_BOOT_REFERENCE_TOLERANCE_DEG
+      );
       nanoBootSession.noteNanoBootState(nanoStatusSnapshot.boot);
       nanoStartupSyncScheduled = false;
+      if (recoveredReady) {
+        DEBUG_SERIAL.println(
+          "[NANO] recovered missed READY from safe Q status"
+        );
+      }
     }
 
     DEBUG_SERIAL.printf(
