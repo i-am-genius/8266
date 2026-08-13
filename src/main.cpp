@@ -130,6 +130,11 @@ void setup() {
 
   LOG_INFO("BOOT", String("设备启动 ID=" + deviceId + " FW=" + String(FW_VERSION)).c_str());
 
+  // 先消费 Nano 一次性的 READY，让开场动画与后续初始化、联网并行。
+  scheduleNanoStartupSync();
+  pollNano();
+  handleNanoStartupSync();
+
   if (!LittleFS.begin()) {
     DEBUG_SERIAL.println("[FS] LittleFS 挂载失败");
     LOG_ERROR("BOOT", "LittleFS 挂载失败");
@@ -140,9 +145,6 @@ void setup() {
 
   setupHardwareAndSensors();
 
-  // READY 驱动新版 Nano 的启动动画；Q 探测确认是旧协议时，
-  // 才回退到延时重发 m/s/S/X 的兼容同步。
-  scheduleNanoStartupSync();
   bool hasConfig = loadConfig();
   bool wifiOk = false;
 

@@ -1,5 +1,6 @@
 #include "network/wifi_manager.h"
 #include "config/config_manager.h"
+#include "device/arm_controller.h"
 #include "online_logger.h"
 #include "diagnostics/diagnostic_logger.h"
 
@@ -84,11 +85,18 @@ bool connectWiFi(const String& ssid, const String& password, unsigned long timeo
 
   DEBUG_SERIAL.println("\n[WiFi] 正在连接: " + ssid);
   unsigned long start = millis();
+  unsigned long lastProgressAt = start;
   while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
-    delay(500);
-    DEBUG_SERIAL.print(".");
-    yield();
+    pollNano();
+    handleNanoStartupSync();
+    if (millis() - lastProgressAt >= 500) {
+      DEBUG_SERIAL.print(".");
+      lastProgressAt = millis();
+    }
+    delay(10);
   }
+  pollNano();
+  handleNanoStartupSync();
   DEBUG_SERIAL.println();
 
   if (WiFi.status() == WL_CONNECTED) {

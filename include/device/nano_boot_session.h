@@ -45,6 +45,10 @@ class NanoBootSession {
   bool onReadyLine(const char* line);
   NanoBootReply onBootReply(const char* line);
   void noteNanoBootState(const char* state);
+  bool recoverReadyFromStatus(
+    const NanoStatusSnapshot& status,
+    float referenceToleranceDeg
+  );
   void markStartupAimReady();
   void beginOtaCancel();
   void resumeAfterOtaFailure();
@@ -76,14 +80,22 @@ class NanoBootSession {
 class NanoStatusProbe {
  public:
   bool begin(uint32_t nowMs);
+  bool takeSendRequest(
+    uint32_t nowMs,
+    uint32_t retryIntervalMs,
+    uint8_t maxAttempts
+  );
   void succeed();
   void reset();
   bool updateTimeout(uint32_t nowMs, uint32_t timeoutMs);
   NanoProbeResult result() const;
+  uint8_t sendAttempts() const;
 
  private:
   NanoProbeResult result_ = NanoProbeResult::Idle;
   uint32_t startedAtMs_ = 0;
+  uint32_t lastSentAtMs_ = 0;
+  uint8_t sendAttempts_ = 0;
 };
 
 float nanoBootPanCommand(float garmentPanDeg);
