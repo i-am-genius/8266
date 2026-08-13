@@ -13,9 +13,9 @@
 // do not starve webSocket.loop() long enough to trigger false disconnects.
 static const uint16_t HTTP_POST_TIMEOUT_MS = 2500;
 
-// Announce runs before the WebSocket client starts, so it can safely wait
-// longer than normal state-report calls for the backend's registration reply.
-static const uint16_t ANNOUNCE_HTTP_TIMEOUT_MS = 8000;
+// Announce shares the main loop with WebSocket servicing, so keep its blocking
+// window bounded below the heartbeat timeout.
+static const uint16_t ANNOUNCE_HTTP_TIMEOUT_MS = HTTP_POST_TIMEOUT_MS;
 
 String httpUrl(const String& path) {
   return "http://" + cfg.serverHost + ":" + String(cfg.httpPort) + path;

@@ -6,7 +6,7 @@
 #include "diagnostics/diagnostic_logger.h"
 
 static const unsigned long SELFTEST_NANO_HOMING_TIMEOUT_MS = 30000;
-static const unsigned long SELFTEST_NANO_STATUS_TIMEOUT_MS = 2000;
+static const unsigned long SELFTEST_NANO_HALL_TIMEOUT_MS = 2000;
 
 static SelfTestState selfTestState = SELFTEST_IDLE;
 static unsigned long selfTestStepStartedAt = 0;
@@ -192,44 +192,45 @@ void handleSelfTestTask() {
       if (selfTestNanoHallReadEnabled) {
         sendNano('h');
       } else {
-        sendNano('Q');
+        ensureNanoStatusProbe();
       }
       return;
 
     case SELFTEST_NANO_WAIT_STATUS:
-      if (hasFreshNanoLine()) {
-        if (selfTestNanoHallReadEnabled && lastNanoLine.indexOf("Hall pan=") >= 0) {
+      if (selfTestNanoHallReadEnabled) {
+        if (hasFreshNanoLine() && lastNanoLine.indexOf("Hall pan=") >= 0) {
           lastNanoCommOk = true;
           lastNanoHallStatusOk = true;
           selfTestNanoStatus = lastNanoLine;
           enterSelfTestState(SELFTEST_DONE);
           return;
         }
-
-        if (
-          !selfTestNanoHallReadEnabled &&
-          lastNanoLine.startsWith("NANO_OK ")
-        ) {
-          lastNanoCommOk = true;
-          lastNanoHallStatusOk = true;
-          selfTestNanoStatus = lastNanoLine;
+        if (selfTestStepTimedOut(SELFTEST_NANO_HALL_TIMEOUT_MS)) {
+          lastNanoHallStatusOk = false;
+          selfTestNanoStatus = "hall_no_response";
+          diagnosticLogNano("hall status timeout", true);
           enterSelfTestState(SELFTEST_DONE);
-          return;
         }
+        return;
       }
 
-      if (selfTestStepTimedOut(SELFTEST_NANO_STATUS_TIMEOUT_MS)) {
-        lastNanoHallStatusOk = false;
-        selfTestNanoStatus = selfTestNanoHallReadEnabled
-            ? "hall_no_response"
-            : "nano_no_response";
-        diagnosticLogNano(
-          selfTestNanoHallReadEnabled
-              ? "hall status timeout"
-              : "nano status timeout",
-          true
-        );
-        enterSelfTestState(SELFTEST_DONE);
+      switch (getNanoStatusProbeResult()) {
+        case NanoProbeResult::Ok:
+          lastNanoCommOk = true;
+          lastNanoHallStatusOk = true;
+          selfTestNanoStatus = getNanoStatusProbeLine();
+          enterSelfTestState(SELFTEST_DONE);
+          return;
+        case NanoProbeResult::TimedOut:
+          lastNanoHallStatusOk = false;
+          selfTestNanoStatus = "nano_no_response";
+          enterSelfTestState(SELFTEST_DONE);
+          return;
+        case NanoProbeResult::Idle:
+          ensureNanoStatusProbe();
+          return;
+        case NanoProbeResult::Pending:
+          return;
       }
       return;
 

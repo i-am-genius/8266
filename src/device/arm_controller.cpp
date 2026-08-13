@@ -32,6 +32,7 @@ static const float TILT_COMMAND_RATIO =30.0f / 48.0f;
 static const unsigned long NANO_STARTUP_SYNC_DELAY_MS = 1800;
 static const unsigned long NANO_STARTUP_SYNC_RETRY_MS = 1200;
 static const uint8_t NANO_STARTUP_SYNC_MAX_ATTEMPTS = 3;
+static const unsigned long NANO_STATUS_PROBE_TIMEOUT_MS = 2000;
 
 static float panEstimateDeg = 0.0f;
 static float tiltEstimateDeg = 0.0f;
@@ -39,10 +40,14 @@ static bool nanoStartupSyncScheduled = false;
 static unsigned long nanoStartupSyncScheduledAt = 0;
 static unsigned long nanoStartupSyncLastAttemptAt = 0;
 static uint8_t nanoStartupSyncAttempts = 0;
-static bool nanoStartupStatusRequested = false;
-static unsigned long nanoStartupStatusRequestedAt = 0;
 static bool nanoStartupEnableRecovered = false;
 static bool nanoStartupEnableRecoveryPending = false;
+static NanoBootSession nanoBootSession;
+static NanoStatusProbe nanoStatusProbe;
+static NanoStatusSnapshot nanoStatusSnapshot{};
+static String nanoStatusLine = "";
+static float nanoStartupAimPan = 0.0f;
+static float nanoStartupAimTilt = 0.0f;
 static bool nanoSliderArrivalReportPending = false;
 static bool nanoSliderCaptureTaskPending = false;
 static String nanoSliderCaptureTaskId = "";
@@ -99,26 +104,135 @@ void sendTiltSpeed(float valueDegPerSec) {
   sendNanoFloat('S', max(0.0f, valueDegPerSec) * TILT_COMMAND_RATIO);
 }
 
-void scheduleNanoStartupSync() {
+void sendNanoBootFinish(float garmentPan, float garmentTilt) {
+  const float nanoPan = nanoBootPanCommand(garmentPan);
+  const float nanoTilt = nanoBootTiltCommand(garmentTilt);
+
+  char value[32];
+  snprintf(value, sizeof(value), ",%.2f,%.2f", nanoPan, nanoTilt);
+  sendNano('F', String(value));
+}
+
+static void resetNanoStartupSyncTimer() {
   nanoStartupSyncScheduled = true;
   nanoStartupSyncScheduledAt = millis();
   nanoStartupSyncLastAttemptAt = 0;
   nanoStartupSyncAttempts = 0;
-  nanoStartupStatusRequested = false;
-  nanoStartupStatusRequestedAt = 0;
+}
+
+void scheduleNanoStartupSync() {
+  if (nanoBootSession.readySeen()) {
+    nanoStartupSyncScheduled = false;
+    return;
+  }
+  resetNanoStartupSyncTimer();
   nanoStartupEnableRecovered = false;
   nanoStartupEnableRecoveryPending = false;
   nanoEnableStateKnown = false;
   nanoEnabled = true;
 }
 
+void ensureNanoStatusProbe() {
+  if (nanoStatusProbe.result() != NanoProbeResult::Idle) {
+    return;
+  }
+  if (!nanoStatusProbe.begin(millis())) {
+    return;
+  }
+  sendNano('Q');
+}
+
+NanoProbeResult getNanoStatusProbeResult() {
+  return nanoStatusProbe.result();
+}
+
+String getNanoStatusProbeLine() {
+  return nanoStatusLine;
+}
+
+void markNanoStartupAimReady(float garmentPan, float garmentTilt) {
+  if (nanoBootSession.startupAimReady()) {
+    return;
+  }
+  nanoStartupAimPan = garmentPan;
+  nanoStartupAimTilt = garmentTilt;
+  nanoBootSession.markStartupAimReady();
+}
+
+static void dispatchNanoBootAction() {
+  const NanoBootAction action = nanoBootSession.pendingAction();
+  if (action == NanoBootAction::None) {
+    return;
+  }
+
+  nanoBootSession.markActionSent(action);
+  switch (action) {
+    case NanoBootAction::SendBoot:
+      DEBUG_SERIAL.println("[NANO] READY accepted; starting boot animation");
+      sendNano('B');
+      return;
+    case NanoBootAction::SendFinish:
+      DEBUG_SERIAL.printf(
+        "[NANO] startup aim ready pan=%.2f tilt=%.2f\n",
+        nanoStartupAimPan,
+        nanoStartupAimTilt
+      );
+      sendNanoBootFinish(nanoStartupAimPan, nanoStartupAimTilt);
+      return;
+    case NanoBootAction::SendCancel:
+      DEBUG_SERIAL.println("[NANO] cancelling boot animation before OTA");
+      sendNano('C');
+      return;
+    case NanoBootAction::None:
+      return;
+  }
+}
+
+void beginNanoOtaCancel() {
+  nanoBootSession.beginOtaCancel();
+  dispatchNanoBootAction();
+}
+
+void resumeNanoAfterOtaFailure() {
+  nanoBootSession.resumeAfterOtaFailure();
+}
+
 void handleNanoStartupSync() {
+  if (nanoStatusProbe.updateTimeout(millis(), NANO_STATUS_PROBE_TIMEOUT_MS)) {
+    DEBUG_SERIAL.println("[NANO] nano status timeout");
+    diagnosticLogNano("nano status timeout", true);
+  }
+
+  dispatchNanoBootAction();
+
+  if (nanoStartupEnableRecoveryPending) {
+    nanoStartupEnableRecoveryPending = false;
+    DEBUG_SERIAL.println("[NANO] startup recovery: re-enabling drivers");
+    diagnosticLogNano("re-enabling disabled drivers");
+    sendNano('e');
+  }
+
   if (!nanoStartupSyncScheduled) {
     return;
   }
 
   unsigned long now = millis();
   if (now - nanoStartupSyncScheduledAt < NANO_STARTUP_SYNC_DELAY_MS) {
+    return;
+  }
+
+  if (nanoStatusProbe.result() == NanoProbeResult::Idle) {
+    ensureNanoStatusProbe();
+    return;
+  }
+  if (nanoStatusProbe.result() == NanoProbeResult::Pending) {
+    return;
+  }
+  if (
+    nanoStatusProbe.result() == NanoProbeResult::Ok &&
+    nanoStatusSnapshot.hasBoot
+  ) {
+    nanoStartupSyncScheduled = false;
     return;
   }
 
@@ -141,11 +255,14 @@ void handleNanoStartupSync() {
   sendNano('m', "16");
   applyArmSpeed(currentArmSpeed);
 
+  if (nanoBootSession.readySeen()) {
+    nanoStartupSyncScheduled = false;
+    dispatchNanoBootAction();
+    return;
+  }
+
   if (nanoStartupSyncAttempts >= NANO_STARTUP_SYNC_MAX_ATTEMPTS) {
     nanoStartupSyncScheduled = false;
-    nanoStartupStatusRequested = true;
-    nanoStartupStatusRequestedAt = now;
-    sendNano('R');
   }
 }
 
@@ -275,6 +392,69 @@ static void handleNanoSliderDoneLine(const String& line) {
   reportNanoSliderArrival();
 }
 
+static void handleNanoProtocolLine(const String& line) {
+  const bool hadNanoBootSession = nanoBootSession.readySeen()
+    || nanoBootSession.bootRequested()
+    || nanoBootSession.finishSent();
+  if (nanoBootSession.noteInitializationLine(line.c_str()) && hadNanoBootSession) {
+    DEBUG_SERIAL.println("[NANO] new initialization detected");
+    nanoStatusProbe.reset();
+    nanoStatusSnapshot = NanoStatusSnapshot{};
+    nanoStatusLine = "";
+    nanoEnableStateKnown = false;
+    nanoEnabled = true;
+    nanoStartupEnableRecovered = false;
+    nanoStartupEnableRecoveryPending = false;
+    resetNanoStartupSyncTimer();
+  }
+
+  if (nanoBootSession.onReadyLine(line.c_str())) {
+    nanoStartupSyncScheduled = false;
+  }
+
+  const NanoBootReply bootReply = nanoBootSession.onBootReply(line.c_str());
+  if (bootReply == NanoBootReply::RejectedReference) {
+    DEBUG_SERIAL.println("[NANO] boot animation rejected: not at power-on reference");
+    diagnosticLogNano("boot rejected: not at power-on reference", true);
+  } else if (bootReply == NanoBootReply::RejectedOther) {
+    diagnosticLogNano(line.c_str(), true);
+  }
+
+  NanoStatusSnapshot parsedStatus{};
+  if (parseNanoStatusLine(line.c_str(), parsedStatus)) {
+    nanoStatusSnapshot = parsedStatus;
+    nanoStatusLine = line;
+    nanoStatusProbe.succeed();
+
+    if (nanoStatusSnapshot.hasEnabled) {
+      nanoEnableStateKnown = true;
+      nanoEnabled = nanoStatusSnapshot.enabled;
+      if (!nanoEnabled && !nanoStartupEnableRecovered) {
+        nanoStartupEnableRecovered = true;
+        nanoStartupEnableRecoveryPending = true;
+      }
+    }
+    if (nanoStatusSnapshot.hasBoot) {
+      nanoBootSession.noteNanoBootState(nanoStatusSnapshot.boot);
+      nanoStartupSyncScheduled = false;
+    }
+
+    DEBUG_SERIAL.printf(
+      "[NANO] status en=%d moving=%d boot=%s pan=%.2f tilt=%.2f timeout=%d\n",
+      nanoStatusSnapshot.hasEnabled ? (nanoStatusSnapshot.enabled ? 1 : 0) : -1,
+      nanoStatusSnapshot.hasMoving ? (nanoStatusSnapshot.moving ? 1 : 0) : -1,
+      nanoStatusSnapshot.hasBoot ? nanoStatusSnapshot.boot : "unknown",
+      nanoStatusSnapshot.hasPan ? nanoStatusSnapshot.pan : 0.0f,
+      nanoStatusSnapshot.hasTilt ? nanoStatusSnapshot.tilt : 0.0f,
+      nanoStatusSnapshot.hasTimeout ? (nanoStatusSnapshot.timedOut ? 1 : 0) : -1
+    );
+  }
+
+  if (line.startsWith("ERR F ") || line.startsWith("ERR C ")) {
+    diagnosticLogNano(line.c_str(), true);
+  }
+}
+
 void pollNano() {
   static String line;
 
@@ -283,34 +463,32 @@ void pollNano() {
     if (ch == '\r') continue;
     if (ch == '\n') {
       if (line.length() > 0) {
-        lastNanoLine = line;
+        const String completeLine = line;
+        line = "";
+        lastNanoLine = completeLine;
         lastNanoRxAt = millis();
         nanoLineSeen = true;
-        DEBUG_SERIAL.println("[NANO] RX " + line);
-        handleNanoSliderDoneLine(line);
+        DEBUG_SERIAL.println("[NANO] RX " + completeLine);
+        handleNanoSliderDoneLine(completeLine);
+        handleNanoProtocolLine(completeLine);
 
         bool parsedEnabled = true;
-        if (parseNanoEnableStateLine(line, parsedEnabled)) {
+        if (parseNanoEnableStateLine(completeLine, parsedEnabled)) {
           nanoEnableStateKnown = true;
           nanoEnabled = parsedEnabled;
           DEBUG_SERIAL.printf("[NANO] enable=%d\n", nanoEnabled ? 1 : 0);
 
-          if (nanoStartupStatusRequested && !nanoEnabled && !nanoStartupEnableRecovered) {
+          if (!nanoEnabled && !nanoStartupEnableRecovered) {
             nanoStartupEnableRecovered = true;
             nanoStartupEnableRecoveryPending = true;
           }
-        } else if (line == "Enabled") {
+        } else if (completeLine == "Enabled") {
           nanoEnableStateKnown = true;
           nanoEnabled = true;
-        } else if (line == "Disabled") {
+        } else if (completeLine == "Disabled") {
           nanoEnableStateKnown = true;
           nanoEnabled = false;
         }
-
-        if (nanoStartupStatusRequested && nanoEnableStateKnown && nanoEnabled) {
-          nanoStartupStatusRequested = false;
-        }
-        line = "";
       }
       continue;
     }
@@ -322,26 +500,6 @@ void pollNano() {
       DEBUG_SERIAL.println("[NANO] RX line too long, dropped");
       diagnosticLogNano("RX line too long", true);
     }
-  }
-
-  if (
-    nanoStartupStatusRequested &&
-    millis() - nanoStartupStatusRequestedAt > 3000 &&
-    !nanoEnableStateKnown
-  ) {
-    DEBUG_SERIAL.println("[NANO] startup status check timed out");
-    diagnosticLogNano("startup status timeout", true);
-    nanoStartupStatusRequested = false;
-  }
-
-  if (nanoStartupEnableRecoveryPending) {
-    nanoStartupEnableRecoveryPending = false;
-    DEBUG_SERIAL.println("[NANO] startup recovery: re-enabling drivers");
-    diagnosticLogNano("re-enabling disabled drivers");
-    sendNano('e');
-    sendNano('m', "16");
-    applyArmSpeed(currentArmSpeed);
-    sendNano('R');
   }
 }
 

@@ -120,10 +120,6 @@ void setup() {
 
   logInit();
 
-  // Match the working 8266test startup path: prime Nano before WiFi/sensors.
-  sendNano('m', "16");
-  applyArmSpeed(currentArmSpeed);
-
   deviceId = makeDeviceId();
 
   DEBUG_SERIAL.println("\n========================");
@@ -144,8 +140,8 @@ void setup() {
 
   setupHardwareAndSensors();
 
-  // Nano 的启动通常比 ESP 稍慢，这里延时重发几轮初始化，
-  // 以避免首轮 m/s/S/X 在 Nano 串口尚未就绪时丢掉。
+  // READY 驱动新版 Nano 的启动动画；Q 探测确认是旧协议时，
+  // 才回退到延时重发 m/s/S/X 的兼容同步。
   scheduleNanoStartupSync();
   bool hasConfig = loadConfig();
   bool wifiOk = false;
@@ -177,14 +173,8 @@ void setup() {
 
   broadcastIPCached = false;
   setupDeviceHttpServer();
-  sendAnnounce();
-  if (backendDeviceAdded) {
-    LOG_INFO("BOOT", "开始连接 WebSocket");
-    beginWebSocketClient();
-  } else {
-    DEBUG_SERIAL.println("[WS] skip connect until backend announce returns added=true");
-    LOG_INFO("BOOT", "等待后端 announce 确认后再连接 WS");
-  }
+  LOG_INFO("BOOT", "开始连接 WebSocket；announce 将在主循环异步调度");
+  beginWebSocketClient();
 }
 
 void loop() {
