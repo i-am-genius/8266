@@ -1,4 +1,5 @@
 #include "device/ota_manager.h"
+#include "device/arm_controller.h"
 #include "network/http_reporter.h"
 #include "network/ws_client.h"
 #include "online_logger.h"
@@ -57,6 +58,7 @@ static void otaError(int err) {
 
 void doOtaUpdate(const String& url, const String& version, int versionCode, const String& channel, const String& md5) {
   if (otaInProgress) return;
+  beginNanoOtaCancel();
   otaInProgress = true;
   otaStatus = "updating";
   otaProgress = 0;
@@ -98,6 +100,7 @@ void doOtaUpdate(const String& url, const String& version, int versionCode, cons
       otaStatus = "failed";
       reportOtaStateNow("OTA_FAILED");
       otaInProgress = false;
+      resumeNanoAfterOtaFailure();
       {
         String errMsg = "OTA 失败 code=" + String(ESPhttpUpdate.getLastError()) + " err=" + ESPhttpUpdate.getLastErrorString();
         LOG_ERROR("OTA", errMsg.c_str());
@@ -111,6 +114,7 @@ void doOtaUpdate(const String& url, const String& version, int versionCode, cons
       reportOtaStateNow("OTA_NO_UPDATES");
       DEBUG_SERIAL.println("[OTA] 没有更新");
       otaInProgress = false;
+      resumeNanoAfterOtaFailure();
       beginWebSocketClient();
       break;
 

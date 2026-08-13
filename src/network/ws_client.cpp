@@ -381,6 +381,10 @@ void handleWsMessage(const String& text) {
 
     safeCopyFabric(payload["fabric"]);
     handleGarmentAimState(payload);
+    float startupDefaultPan = 0.0f;
+    float startupDefaultTilt = 0.0f;
+    getDefaultGarmentAim(startupDefaultPan, startupDefaultTilt);
+    markNanoStartupAimReady(startupDefaultPan, startupDefaultTilt);
 
     DEBUG_SERIAL.printf("WS控制：亮度=%d 色温=%d 自动=%d 推荐亮度=%d 推荐色温=%d 面料=%s\n",
                   brightness, temp, autoMode,

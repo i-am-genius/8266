@@ -1,6 +1,7 @@
 #pragma once
 #include "app_config.h"
 #include "device/arm_limits.h"
+#include "device/nano_boot_session.h"
 static const int TILT_MIN = -90;
 static const int TILT_MAX = 90;
 static const int SLIDER_MIN = 0;
@@ -36,8 +37,15 @@ void sendPanTarget(float valueDeg);
 void sendTiltTarget(float valueDeg);
 void sendPanSpeed(float valueDegPerSec);
 void sendTiltSpeed(float valueDegPerSec);
+void sendNanoBootFinish(float garmentPan, float garmentTilt);
 void scheduleNanoStartupSync();
 void handleNanoStartupSync();
+void markNanoStartupAimReady(float garmentPan, float garmentTilt);
+void ensureNanoStatusProbe();
+NanoProbeResult getNanoStatusProbeResult();
+String getNanoStatusProbeLine();
+void beginNanoOtaCancel();
+void resumeNanoAfterOtaFailure();
 void sendPanTilt();
 void sendSlider();
 void applyArmSpeed(const String& speed);
