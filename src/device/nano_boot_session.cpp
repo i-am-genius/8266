@@ -296,6 +296,18 @@ uint8_t NanoStatusProbe::sendAttempts() const {
   return sendAttempts_;
 }
 
+bool acceptNanoReadyLine(
+  NanoBootSession& bootSession,
+  NanoStatusProbe& statusProbe,
+  const char* line
+) {
+  if (!bootSession.onReadyLine(line)) {
+    return false;
+  }
+  statusProbe.reset();
+  return true;
+}
+
 float nanoBootPanCommand(float garmentPanDeg) {
   return clampFloat(garmentPanDeg, -30.0f, 30.0f);
 }
