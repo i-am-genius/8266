@@ -2,6 +2,20 @@
 
 #include <cmath>
 
+LampAimSyncAction LampAimSyncGate::onState(bool garmentTrackingEnabled) {
+  if (!initialized_) {
+    initialized_ = true;
+    garmentTrackingEnabled_ = garmentTrackingEnabled;
+    return LampAimSyncAction::CacheOnly;
+  }
+
+  const bool modeChanged = garmentTrackingEnabled_ != garmentTrackingEnabled;
+  garmentTrackingEnabled_ = garmentTrackingEnabled;
+  return modeChanged
+    ? LampAimSyncAction::ForceApply
+    : LampAimSyncAction::ApplyIfChanged;
+}
+
 LampAimSelection selectLampAim(const LampAimState& state) {
   if (state.personTrackingActive) {
     if (state.personTargetValid) {

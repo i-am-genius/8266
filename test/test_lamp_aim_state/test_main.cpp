@@ -80,6 +80,43 @@ void test_same_selection_compares_only_pan_and_tilt() {
   TEST_ASSERT_FALSE(sameLampAimSelection(left, right));
 }
 
+void test_first_aim_state_is_cached_without_motion() {
+  LampAimSyncGate gate;
+
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(LampAimSyncAction::CacheOnly),
+    static_cast<int>(gate.onState(false))
+  );
+}
+
+void test_repeated_aim_state_only_applies_when_pose_changed() {
+  LampAimSyncGate gate;
+  gate.onState(false);
+
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(LampAimSyncAction::ApplyIfChanged),
+    static_cast<int>(gate.onState(false))
+  );
+}
+
+void test_explicit_tracking_toggle_forces_aim_motion() {
+  LampAimSyncGate gate;
+  gate.onState(false);
+
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(LampAimSyncAction::ForceApply),
+    static_cast<int>(gate.onState(true))
+  );
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(LampAimSyncAction::ApplyIfChanged),
+    static_cast<int>(gate.onState(true))
+  );
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(LampAimSyncAction::ForceApply),
+    static_cast<int>(gate.onState(false))
+  );
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_garment_runtime_pose_temporarily_overrides_configured_default);
@@ -87,5 +124,8 @@ int main(int, char**) {
   RUN_TEST(test_person_tracking_has_priority_and_starts_from_configured_default);
   RUN_TEST(test_stopping_person_tracking_restores_runtime_garment_without_changing_defaults);
   RUN_TEST(test_same_selection_compares_only_pan_and_tilt);
+  RUN_TEST(test_first_aim_state_is_cached_without_motion);
+  RUN_TEST(test_repeated_aim_state_only_applies_when_pose_changed);
+  RUN_TEST(test_explicit_tracking_toggle_forces_aim_motion);
   return UNITY_END();
 }

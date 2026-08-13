@@ -1,4 +1,5 @@
 #include "network/ws_client.h"
+#include "network/arm_position_policy.h"
 #include "device/light_control.h"
 #include "device/arm_controller.h"
 #include "device/ota_manager.h"
@@ -35,6 +36,7 @@ static LampAimState lampAimState{
   false,
   false,
 };
+static LampAimSyncGate lampAimSyncGate;
 static bool appliedAimInitialized = false;
 static LampAimSelection lastAppliedAim{
   LampAimSource::DefaultGarment,
@@ -126,11 +128,35 @@ static void applySelectedLampAim(const char* reason, bool force = false) {
   );
 }
 
+static void cacheSelectedLampAimWithoutMotion() {
+  LampAimSelection selected = selectLampAim(lampAimState);
+  selected.pose = normalizeLampAimPose(selected.pose);
+  lastAppliedAim = selected;
+  appliedAimInitialized = true;
+  DEBUG_SERIAL.printf(
+    "[LAMP_AIM] initial state cached without motion source=%s pan=%.1f tilt=%.1f\n",
+    lampAimSourceName(selected.source),
+    selected.pose.panDeg,
+    selected.pose.tiltDeg
+  );
+}
+
+static void syncSelectedLampAim(const char* reason) {
+  const LampAimSyncAction syncAction = lampAimSyncGate.onState(
+    lampAimState.garmentTrackingEnabled
+  );
+  if (syncAction == LampAimSyncAction::CacheOnly) {
+    cacheSelectedLampAimWithoutMotion();
+    return;
+  }
+  applySelectedLampAim(reason, syncAction == LampAimSyncAction::ForceApply);
+}
+
 static void handleGarmentAimState(JsonObject payload) {
   const bool defaultsChanged = updateConfiguredDefaultAims(payload);
   if (!payload.containsKey("garmentAimEnabled")) {
     if (defaultsChanged) {
-      applySelectedLampAim("default_aim_changed");
+      syncSelectedLampAim("default_aim_changed");
     }
     return;
   }
@@ -192,7 +218,9 @@ static void handleGarmentAimState(JsonObject payload) {
     DEBUG_SERIAL.println("[GARMENT_AIM] no reliable detected target, using default preset");
   }
 
-  applySelectedLampAim(defaultsChanged ? "garment_state_defaults_changed" : "garment_state");
+  syncSelectedLampAim(
+    defaultsChanged ? "garment_state_defaults_changed" : "garment_state"
+  );
 }
 
 void startPersonTrackingAim() {
@@ -474,11 +502,11 @@ void handleWsMessage(const String& text) {
     String captureTaskId = payload["taskId"] | "";
     source.trim();
     captureTaskId.trim();
-    const bool captureMotion = source == "camera_capture";
+    const bool trackedSliderMotion = armPositionSourceRequiresArrivalTaskId(source.c_str());
 
-    if (captureMotion && (captureTaskId.length() == 0 || captureTaskId.length() > 64)) {
-      DEBUG_SERIAL.println("[ARM] camera capture motion missing valid taskId");
-      diagnosticLogWs("camera capture motion missing valid taskId", true);
+    if (trackedSliderMotion && (captureTaskId.length() == 0 || captureTaskId.length() > 64)) {
+      DEBUG_SERIAL.println("[ARM] tracked slider motion missing valid taskId");
+      diagnosticLogWs("tracked slider motion missing valid taskId", true);
       return;
     }
 
@@ -502,7 +530,7 @@ void handleWsMessage(const String& text) {
       sendNano(
         'x',
         String((float)sliderMm, 2),
-        captureMotion ? captureTaskId : String("")
+        trackedSliderMotion ? captureTaskId : String("")
       );
       changed = true;
     }

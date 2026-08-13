@@ -209,7 +209,10 @@ void loop() {
   // 摇杆连续运动更新 (每帧)
   updateArmJoystickMotion();
   handleSelfTestTask();
-  const bool runNonCriticalHttp = shouldRunNonCriticalHttp(effectWaveEnabled);
+  const bool runNonCriticalHttp = shouldRunNonCriticalHttp(
+    effectWaveEnabled,
+    isPersonTrackingAimActive()
+  );
   if (runNonCriticalHttp) {
     handleDeviceStateReportTask();
   }
