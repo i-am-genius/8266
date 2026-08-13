@@ -5,7 +5,7 @@
 void setUp() {}
 void tearDown() {}
 
-void test_only_exact_ready_line_starts_boot() {
+void test_ready_line_never_requests_boot_from_8266() {
   NanoBootSession session;
 
   TEST_ASSERT_FALSE(session.onReadyLine("OK step mode=16"));
@@ -16,77 +16,53 @@ void test_only_exact_ready_line_starts_boot() {
   TEST_ASSERT_FALSE(session.onReadyLine("READY zero=1"));
   TEST_ASSERT_TRUE(session.onReadyLine("READY zero=0"));
   TEST_ASSERT_EQUAL_INT(
-    static_cast<int>(NanoBootAction::SendBoot),
+    static_cast<int>(NanoBootAction::None),
     static_cast<int>(session.pendingAction())
   );
 }
 
-void test_boot_is_sent_once_per_nano_initialization() {
-  NanoBootSession session;
-  session.noteInitializationLine("OK step mode=16");
-  session.onReadyLine("READY zero=0");
-  session.markActionSent(NanoBootAction::SendBoot);
-
-  session.onReadyLine("READY zero=0");
-  TEST_ASSERT_EQUAL_INT(
-    static_cast<int>(NanoBootAction::None),
-    static_cast<int>(session.pendingAction())
-  );
-
-  session.noteInitializationLine("OK step mode=16");
-  session.onReadyLine("READY zero=0");
-  TEST_ASSERT_EQUAL_INT(
-    static_cast<int>(NanoBootAction::SendBoot),
-    static_cast<int>(session.pendingAction())
-  );
-}
-
-void test_finish_waits_for_boot_ack_and_server_aim_in_either_order() {
-  NanoBootSession serverFirst;
-  serverFirst.markStartupAimReady();
-  serverFirst.onReadyLine("READY zero=0");
-  serverFirst.markActionSent(NanoBootAction::SendBoot);
-  TEST_ASSERT_EQUAL_INT(
-    static_cast<int>(NanoBootAction::None),
-    static_cast<int>(serverFirst.pendingAction())
-  );
-  TEST_ASSERT_EQUAL_INT(
-    static_cast<int>(NanoBootReply::Opening),
-    static_cast<int>(serverFirst.onBootReply("OK B state=OPENING"))
-  );
-  TEST_ASSERT_EQUAL_INT(
-    static_cast<int>(NanoBootAction::SendFinish),
-    static_cast<int>(serverFirst.pendingAction())
-  );
-
-  NanoBootSession nanoFirst;
-  nanoFirst.onReadyLine("READY zero=0");
-  nanoFirst.markActionSent(NanoBootAction::SendBoot);
-  TEST_ASSERT_EQUAL_INT(
-    static_cast<int>(NanoBootReply::AlreadyActive),
-    static_cast<int>(nanoFirst.onBootReply("OK B active"))
-  );
-  TEST_ASSERT_EQUAL_INT(
-    static_cast<int>(NanoBootAction::None),
-    static_cast<int>(nanoFirst.pendingAction())
-  );
-  nanoFirst.markStartupAimReady();
-  TEST_ASSERT_EQUAL_INT(
-    static_cast<int>(NanoBootAction::SendFinish),
-    static_cast<int>(nanoFirst.pendingAction())
-  );
-  nanoFirst.markActionSent(NanoBootAction::SendFinish);
-  TEST_ASSERT_EQUAL_INT(
-    static_cast<int>(NanoBootAction::None),
-    static_cast<int>(nanoFirst.pendingAction())
-  );
-}
-
-void test_reference_error_never_retries_boot_or_sends_finish() {
+void test_nano_initialization_rearms_finish_for_autonomous_animation() {
   NanoBootSession session;
   session.markStartupAimReady();
-  session.onReadyLine("READY zero=0");
-  session.markActionSent(NanoBootAction::SendBoot);
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(NanoBootAction::SendFinish),
+    static_cast<int>(session.pendingAction())
+  );
+  session.markActionSent(NanoBootAction::SendFinish);
+
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(NanoBootAction::None),
+    static_cast<int>(session.pendingAction())
+  );
+
+  session.noteInitializationLine("OK step mode=16");
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(NanoBootAction::SendFinish),
+    static_cast<int>(session.pendingAction())
+  );
+}
+
+void test_finish_only_waits_for_server_default_aim() {
+  NanoBootSession session;
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(NanoBootAction::None),
+    static_cast<int>(session.pendingAction())
+  );
+  session.markStartupAimReady();
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(NanoBootAction::SendFinish),
+    static_cast<int>(session.pendingAction())
+  );
+  session.markActionSent(NanoBootAction::SendFinish);
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(NanoBootAction::None),
+    static_cast<int>(session.pendingAction())
+  );
+}
+
+void test_stale_boot_error_does_not_block_finish() {
+  NanoBootSession session;
+  session.markStartupAimReady();
 
   TEST_ASSERT_EQUAL_INT(
     static_cast<int>(NanoBootReply::RejectedReference),
@@ -94,7 +70,7 @@ void test_reference_error_never_retries_boot_or_sends_finish() {
   );
   TEST_ASSERT_TRUE(session.bootRejected());
   TEST_ASSERT_EQUAL_INT(
-    static_cast<int>(NanoBootAction::None),
+    static_cast<int>(NanoBootAction::SendFinish),
     static_cast<int>(session.pendingAction())
   );
 }
@@ -108,9 +84,6 @@ void test_finish_uses_existing_tilt_calibration_and_nano_bounds() {
 
 void test_ota_cancel_is_once_only_and_suppresses_late_finish() {
   NanoBootSession session;
-  session.onReadyLine("READY zero=0");
-  session.markActionSent(NanoBootAction::SendBoot);
-  session.onBootReply("OK B state=OPENING");
   session.markStartupAimReady();
 
   session.beginOtaCancel();
@@ -161,7 +134,7 @@ void test_q_idle_reference_recovers_missed_ready() {
   TEST_ASSERT_TRUE(session.recoverReadyFromStatus(status, 0.25f));
   TEST_ASSERT_TRUE(session.readySeen());
   TEST_ASSERT_EQUAL_INT(
-    static_cast<int>(NanoBootAction::SendBoot),
+    static_cast<int>(NanoBootAction::None),
     static_cast<int>(session.pendingAction())
   );
 }
@@ -280,10 +253,10 @@ void test_fresh_ready_invalidates_stale_probe_timeout() {
 
 int main(int, char**) {
   UNITY_BEGIN();
-  RUN_TEST(test_only_exact_ready_line_starts_boot);
-  RUN_TEST(test_boot_is_sent_once_per_nano_initialization);
-  RUN_TEST(test_finish_waits_for_boot_ack_and_server_aim_in_either_order);
-  RUN_TEST(test_reference_error_never_retries_boot_or_sends_finish);
+  RUN_TEST(test_ready_line_never_requests_boot_from_8266);
+  RUN_TEST(test_nano_initialization_rearms_finish_for_autonomous_animation);
+  RUN_TEST(test_finish_only_waits_for_server_default_aim);
+  RUN_TEST(test_stale_boot_error_does_not_block_finish);
   RUN_TEST(test_finish_uses_existing_tilt_calibration_and_nano_bounds);
   RUN_TEST(test_ota_cancel_is_once_only_and_suppresses_late_finish);
   RUN_TEST(test_q_boot_state_recovers_warm_esp_restart);
