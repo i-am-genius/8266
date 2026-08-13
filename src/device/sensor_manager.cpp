@@ -1,5 +1,6 @@
 #include "device/sensor_manager.h"
 #include "device/light_control.h"
+#include "device/tof_interaction_state.h"
 #include "network/http_reporter.h"
 #include "network/ws_client.h"
 #include "diagnostics/diagnostic_logger.h"
@@ -7,6 +8,20 @@
 static ThresholdGate tofReadGate{};
 static ThresholdGate bh1750ReadGate{};
 static const uint8_t BH1750_I2C_ADDRESS = 0x23;
+static const uint16_t TOF_PERSON_NEAR_THRESHOLD_MM = 2000;
+static const uint16_t TOF_CLOTH_TAKEN_THRESHOLD_MM = 600;
+static const unsigned long TOF_CLOTH_CONFIRM_MS = 500;
+static const uint16_t TOF_CLOTH_RELEASE_THRESHOLD_MM = 800;
+static const unsigned long TOF_CLOTH_REARM_MS = 1000;
+static TofInteractionState tofInteractionState{};
+static bool clothTakenReportPending = false;
+static const TofInteractionConfig tofInteractionConfig{
+  TOF_PERSON_NEAR_THRESHOLD_MM,
+  TOF_CLOTH_TAKEN_THRESHOLD_MM,
+  TOF_CLOTH_CONFIRM_MS,
+  TOF_CLOTH_RELEASE_THRESHOLD_MM,
+  TOF_CLOTH_REARM_MS,
+};
 
 static bool i2cDeviceResponds(uint8_t address) {
   Wire.beginTransmission(address);
@@ -47,11 +62,22 @@ void setupHardwareAndSensors() {
   udp.begin(udpPort);
 }
 
-void updateLightingByToF() {
-  static String lastClothState = "";
-  static unsigned long lastClothStateReportAt = 0;
-  static int lastClothDistanceMm = -1;
+void clearClothTakenState() {
+  clearClothTakenDetection(tofInteractionState);
+  clothTakenReportPending = false;
+}
 
+void sendCurrentLampProximityState() {
+  if (tofInteractionState.proximityInitialized) {
+    sendLampProximityState(tofInteractionState.nearby);
+  }
+  if (clothTakenReportPending && wsConnected) {
+    sendLampClothState("taken", false);
+    clothTakenReportPending = false;
+  }
+}
+
+void updateLightingByToF() {
   if (!tofReady) {
     int br = autoMode ? recommendedBrightness : brightness;
     int tp = autoMode ? recommendedTemp : temp;
@@ -63,12 +89,6 @@ void updateLightingByToF() {
     if (now - lastLightUpdate > lightUpdateInterval) {
       applyLightSettings(br, tp);
       lastLightUpdate = now;
-    }
-    if (lastClothState != "unknown" || now - lastClothStateReportAt > 30000) {
-      lastClothState = "unknown";
-      lastClothDistanceMm = -1;
-      lastClothStateReportAt = now;
-      sendLampClothState("unknown", false);
     }
     return;
   }
@@ -94,28 +114,32 @@ void updateLightingByToF() {
     diagnosticLogSensor("ToF reads recovered");
   }
 
-  if (measure.RangeMilliMeter > TOF_MAX_RANGE_MM) return;
+  if (!tofSampleValid) return;
 
   static bool wasNearby = false;
   static unsigned long transitionStart = 0;
   static unsigned long detectedStart = 0;
   static unsigned long leftStart = 0;
 
-  bool currentNearby = (measure.RangeMilliMeter < 2000);
-  const char* clothState = currentNearby ? "taken" : "on_rack";
+  TofInteractionUpdate interaction = updateTofInteraction(
+    tofInteractionState,
+    measure.RangeMilliMeter,
+    now,
+    tofInteractionConfig
+  );
+  bool currentNearby = interaction.nearby;
 
   DEBUG_SERIAL.printf("测距: %d mm\n", measure.RangeMilliMeter);
 
-  // 状态变化立即上报；距离跳变 >80mm 需至少间隔 3s 防抖；10s 心跳保活
-  if (
-    lastClothState != clothState ||
-    (now - lastClothStateReportAt > 3000 && abs((int)measure.RangeMilliMeter - lastClothDistanceMm) > 80) ||
-    now - lastClothStateReportAt > 10000
-  ) {
-    lastClothState = clothState;
-    lastClothDistanceMm = measure.RangeMilliMeter;
-    lastClothStateReportAt = now;
-    sendLampClothState(clothState, false);
+  if (interaction.proximityChanged) {
+    sendLampProximityState(interaction.nearby);
+  }
+  if (interaction.clothTaken) {
+    clothTakenReportPending = true;
+  }
+  if (clothTakenReportPending && wsConnected) {
+    sendLampClothState("taken", false);
+    clothTakenReportPending = false;
   }
 
   if (autoMode) {
