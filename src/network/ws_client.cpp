@@ -1,6 +1,7 @@
 #include "network/ws_client.h"
 #include "network/arm_position_policy.h"
 #include "device/light_control.h"
+#include "device/sensor_manager.h"
 #include "device/arm_controller.h"
 #include "device/ota_manager.h"
 #include "device/self_test.h"
@@ -496,6 +497,9 @@ void handleWsMessage(const String& text) {
 
   if (type == "lampTrackingStop") {
     stopPersonTrackingAim();
+    if (payload["clearClothTaken"] | false) {
+      clearClothTakenState();
+    }
     DEBUG_SERIAL.println("[LAMP_AIM] person tracking session stopped; base aim restored");
     return;
   }
@@ -669,6 +673,20 @@ void sendLampClothState(const char* clothState, bool tracking, const char* lastT
   DEBUG_SERIAL.println("[WS] lamp cloth state: " + msg);
 }
 
+void sendLampProximityState(bool nearby) {
+  if (!wsConnected) return;
+
+  StaticJsonDocument<128> doc;
+  doc["type"] = "lampProximityState";
+  doc["chipId"] = deviceId;
+  doc["nearby"] = nearby;
+
+  String msg;
+  serializeJson(doc, msg);
+  webSocket.sendTXT(msg);
+  DEBUG_SERIAL.println("[WS] lamp proximity state: " + msg);
+}
+
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
@@ -707,6 +725,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       diagnosticLogWs((String("connected host=") + cfg.serverHost).c_str());
       sendWsRegister();
       sendWsPing();
+      sendCurrentLampProximityState();
       reportPendingNanoSliderArrival();
       if (!bootOnlineReportDone && !bootOnlineReportRequested) {
         bootOnlineReportRequested = true;

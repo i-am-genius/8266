@@ -3,3 +3,5 @@
 
 void setupHardwareAndSensors();
 void updateLightingByToF();
+void clearClothTakenState();
+void sendCurrentLampProximityState();
