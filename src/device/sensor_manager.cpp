@@ -9,6 +9,7 @@ static ThresholdGate tofReadGate{};
 static ThresholdGate bh1750ReadGate{};
 static const uint8_t BH1750_I2C_ADDRESS = 0x23;
 static const uint16_t TOF_PERSON_NEAR_THRESHOLD_MM = 2000;
+static const unsigned long TOF_PROXIMITY_EXIT_CONFIRM_MS = 500;
 static const uint16_t TOF_CLOTH_TAKEN_THRESHOLD_MM = 600;
 static const unsigned long TOF_CLOTH_CONFIRM_MS = 500;
 static const uint16_t TOF_CLOTH_RELEASE_THRESHOLD_MM = 800;
@@ -17,6 +18,7 @@ static TofInteractionState tofInteractionState{};
 static bool clothTakenReportPending = false;
 static const TofInteractionConfig tofInteractionConfig{
   TOF_PERSON_NEAR_THRESHOLD_MM,
+  TOF_PROXIMITY_EXIT_CONFIRM_MS,
   TOF_CLOTH_TAKEN_THRESHOLD_MM,
   TOF_CLOTH_CONFIRM_MS,
   TOF_CLOTH_RELEASE_THRESHOLD_MM,
@@ -103,8 +105,13 @@ void updateLightingByToF() {
     return;
   }
 
-  bool tofSampleValid = measure.RangeStatus == 0 && measure.RangeMilliMeter <= TOF_MAX_RANGE_MM;
-  FailureDecision tofDecision = thresholdGateRecord(tofReadGate, tofSampleValid, 20);
+  TofSample tofSample = classifyTofSample(
+    measure.RangeStatus,
+    measure.RangeMilliMeter,
+    TOF_MAX_RANGE_MM
+  );
+  bool tofSampleUsable = tofSample.kind != TofSampleKind::Invalid;
+  FailureDecision tofDecision = thresholdGateRecord(tofReadGate, tofSampleUsable, 20);
   if (tofDecision == DIAG_LOG_FAILURE) {
     char message[64];
     snprintf(message, sizeof(message), "ToF invalid status=%u range=%u",
@@ -114,22 +121,24 @@ void updateLightingByToF() {
     diagnosticLogSensor("ToF reads recovered");
   }
 
-  if (!tofSampleValid) return;
+  TofInteractionUpdate interaction = updateTofInteraction(
+    tofInteractionState,
+    tofSample,
+    now,
+    tofInteractionConfig
+  );
+  if (!tofSampleUsable) return;
 
   static bool wasNearby = false;
   static unsigned long transitionStart = 0;
   static unsigned long detectedStart = 0;
   static unsigned long leftStart = 0;
 
-  TofInteractionUpdate interaction = updateTofInteraction(
-    tofInteractionState,
-    measure.RangeMilliMeter,
-    now,
-    tofInteractionConfig
-  );
   bool currentNearby = interaction.nearby;
 
-  DEBUG_SERIAL.printf("测距: %d mm\n", measure.RangeMilliMeter);
+  if (tofSample.kind == TofSampleKind::ValidDistance) {
+    DEBUG_SERIAL.printf("测距: %d mm\n", measure.RangeMilliMeter);
+  }
 
   if (interaction.proximityChanged) {
     sendLampProximityState(interaction.nearby);
