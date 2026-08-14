@@ -102,11 +102,11 @@ const unsigned long WAVE_UPDATE_INTERVAL_MS = 80;
 int panDeg = 0;
 int tiltDeg = 0;
 int sliderMm = 0;
-int angleStep = 5;
-int sliderStep = 20;
-int panSpeedDeg = 20;
-int tiltSpeedDeg = 30;
-int sliderSpeedMm = 80;
+int angleStep = 8;
+int sliderStep = 30;
+int panSpeedDeg = 30;
+int tiltSpeedDeg = 45;
+int sliderSpeedMm = 120;
 
 // ===================== 设备配置 =====================
 DeviceConfig cfg;
