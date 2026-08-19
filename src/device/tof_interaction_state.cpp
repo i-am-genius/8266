@@ -1,5 +1,7 @@
 #include "device/tof_interaction_state.h"
 
+static const uint16_t TOF_PERSON_MIN_DISTANCE_MM = 30;
+
 static bool elapsedAtLeast(uint32_t nowMs, uint32_t startedAt, uint32_t durationMs) {
   return static_cast<uint32_t>(nowMs - startedAt) >= durationMs;
 }
@@ -60,7 +62,10 @@ TofInteractionUpdate updateTofInteraction(
   }
 
   const bool hasValidDistance = sample.kind == TofSampleKind::ValidDistance;
-  const bool nearby = hasValidDistance && sample.distanceMm < config.personNearThresholdMm;
+  const bool personDistancePlausible =
+    hasValidDistance && sample.distanceMm >= TOF_PERSON_MIN_DISTANCE_MM;
+  const bool nearby =
+    personDistancePlausible && sample.distanceMm < config.personNearThresholdMm;
   if (nearby) {
     state.proximityExitCandidateActive = false;
     state.proximityExitStartedAt = 0;
