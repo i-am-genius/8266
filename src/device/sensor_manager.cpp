@@ -14,6 +14,7 @@ static const uint16_t TOF_CLOTH_TAKEN_THRESHOLD_MM = 600;
 static const unsigned long TOF_CLOTH_CONFIRM_MS = 500;
 static const uint16_t TOF_CLOTH_RELEASE_THRESHOLD_MM = 800;
 static const unsigned long TOF_CLOTH_REARM_MS = 1000;
+static const unsigned long TOF_NANO_DEBUG_INTERVAL_MS = 250;
 static TofInteractionState tofInteractionState{};
 static bool clothTakenReportPending = false;
 static const TofInteractionConfig tofInteractionConfig{
@@ -24,6 +25,53 @@ static const TofInteractionConfig tofInteractionConfig{
   TOF_CLOTH_RELEASE_THRESHOLD_MM,
   TOF_CLOTH_REARM_MS,
 };
+
+static const char* tofSampleKindName(TofSampleKind kind) {
+  switch (kind) {
+    case TofSampleKind::ValidDistance:
+      return "VALID";
+    case TofSampleKind::NoTarget:
+      return "NO_TARGET";
+    case TofSampleKind::Invalid:
+    default:
+      return "INVALID";
+  }
+}
+
+static void printTofDebugToNano(
+  const VL53L0X_RangingMeasurementData_t& measure,
+  const TofSample& sample,
+  const TofInteractionUpdate& interaction,
+  unsigned long now
+) {
+  static unsigned long lastDebugAt = 0;
+  if (now - lastDebugAt < TOF_NANO_DEBUG_INTERVAL_MS) {
+    return;
+  }
+  lastDebugAt = now;
+
+  unsigned long exitElapsed = 0;
+  if (tofInteractionState.proximityExitCandidateActive) {
+    exitElapsed = now - tofInteractionState.proximityExitStartedAt;
+  }
+
+  // Temporary diagnostic line on the Nano protocol UART. Prefix with '#TOF'
+  // so it is visually distinct from the normal one-letter motor commands.
+  nanoSerial.printf(
+    "#TOF t=%lu status=%u raw=%u kind=%s usable=%u init=%u nearby=%u changed=%u exit=%u exitMs=%lu cloth=%u\n",
+    now,
+    measure.RangeStatus,
+    measure.RangeMilliMeter,
+    tofSampleKindName(sample.kind),
+    sample.kind != TofSampleKind::Invalid ? 1U : 0U,
+    tofInteractionState.proximityInitialized ? 1U : 0U,
+    interaction.nearby ? 1U : 0U,
+    interaction.proximityChanged ? 1U : 0U,
+    tofInteractionState.proximityExitCandidateActive ? 1U : 0U,
+    exitElapsed,
+    interaction.clothTaken ? 1U : 0U
+  );
+}
 
 static bool i2cDeviceResponds(uint8_t address) {
   Wire.beginTransmission(address);
@@ -127,6 +175,7 @@ void updateLightingByToF() {
     now,
     tofInteractionConfig
   );
+  printTofDebugToNano(measure, tofSample, interaction, now);
   if (!tofSampleUsable) return;
 
   static bool wasNearby = false;
