@@ -9,6 +9,8 @@ enum LocateBreathState {
 
 static const int LOCATE_TEMP = 4500;
 static const unsigned long LOCATE_UPDATE_INTERVAL_MS = 30;
+static const unsigned long CAPTURE_LIGHTING_MIN_TTL_MS = 1000;
+static const unsigned long CAPTURE_LIGHTING_MAX_TTL_MS = 30000;
 
 static LocateBreathState locateState = LOCATE_IDLE;
 static int locateTimes = 0;
@@ -18,7 +20,14 @@ static int locateRestoreTemp = 0;
 static unsigned long locateStartedAt = 0;
 static unsigned long lastLocateUpdateAt = 0;
 
+static bool captureLightingActive = false;
+static int captureLightingBrightness = 80;
+static int captureLightingTemp = 4000;
+static unsigned long captureLightingStartedAt = 0;
+static unsigned long captureLightingTtlMs = 0;
+
 void applyLightSettings(int br, int tp) {
+  br = constrain(br, 0, 100);
   tp = constrain(tp, 2700, 6500);
 
   int tempVal = map(tp, 2700, 6500, 0, 1024);
@@ -29,6 +38,48 @@ void applyLightSettings(int br, int tp) {
 
   analogWrite(LED_COLD_PIN, 1024 - pwmCold);
   analogWrite(LED_WARM_PIN, 1024 - pwmWarm);
+}
+
+void startCaptureLightingOverride(int br, int tp, unsigned long ttlMs) {
+  captureLightingBrightness = constrain(br, 0, 100);
+  captureLightingTemp = constrain(tp, 2700, 6500);
+  captureLightingTtlMs = constrain(ttlMs, CAPTURE_LIGHTING_MIN_TTL_MS, CAPTURE_LIGHTING_MAX_TTL_MS);
+  captureLightingStartedAt = millis();
+  captureLightingActive = true;
+  applyLightSettings(captureLightingBrightness, captureLightingTemp);
+  lastLightUpdate = captureLightingStartedAt;
+  DEBUG_SERIAL.printf(
+    "[CAPTURE_LIGHT] start brightness=%d temp=%d ttlMs=%lu\n",
+    captureLightingBrightness,
+    captureLightingTemp,
+    captureLightingTtlMs
+  );
+}
+
+void stopCaptureLightingOverride() {
+  if (!captureLightingActive) return;
+  captureLightingActive = false;
+  captureLightingTtlMs = 0;
+  DEBUG_SERIAL.println("[CAPTURE_LIGHT] stop; normal lighting arbitration resumes");
+}
+
+bool isCaptureLightingOverrideActive() {
+  return captureLightingActive;
+}
+
+void handleCaptureLightingOverrideTask() {
+  if (!captureLightingActive) return;
+  const unsigned long now = millis();
+  if (now - captureLightingStartedAt >= captureLightingTtlMs) {
+    captureLightingActive = false;
+    captureLightingTtlMs = 0;
+    DEBUG_SERIAL.println("[CAPTURE_LIGHT] ttl expired; normal lighting arbitration resumes");
+    return;
+  }
+  if (now - lastLightUpdate >= 50) {
+    applyLightSettings(captureLightingBrightness, captureLightingTemp);
+    lastLightUpdate = now;
+  }
 }
 
 void stopEffectWaveForManualControl() {
@@ -64,7 +115,7 @@ void stopLocateBreath(bool restoreLight) {
     return;
   }
 
-  if (restoreLight) {
+  if (restoreLight && !captureLightingActive) {
     applyLightSettings(locateRestoreBrightness, locateRestoreTemp);
     lastLightUpdate = millis();
   }
@@ -76,7 +127,7 @@ bool isLocateBreathActive() {
 }
 
 void handleLocateBreathTask() {
-  if (locateState == LOCATE_IDLE) {
+  if (captureLightingActive || locateState == LOCATE_IDLE) {
     return;
   }
 
@@ -110,7 +161,7 @@ void handleLocateBreathTask() {
 }
 
 void updateEffectLoop() {
-  if (!effectWaveEnabled) return;
+  if (captureLightingActive || !effectWaveEnabled) return;
 
   unsigned long now = millis();
   if (now - lastEffectUpdateMs < WAVE_UPDATE_INTERVAL_MS) return;
