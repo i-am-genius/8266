@@ -1,5 +1,7 @@
 #include "device/tof_interaction_state.h"
 
+static const uint16_t TOF_PERSON_MIN_DISTANCE_MM = 30;
+
 static bool elapsedAtLeast(uint32_t nowMs, uint32_t startedAt, uint32_t durationMs) {
   return static_cast<uint32_t>(nowMs - startedAt) >= durationMs;
 }
@@ -12,9 +14,16 @@ TofSample classifyTofSample(
   if (rangeStatus == 0 && distanceMm <= maximumDistanceMm) {
     return TofSample{TofSampleKind::ValidDistance, distanceMm};
   }
-  if (rangeStatus == 4) {
+
+  // VL53L0X reports 8190/8191 as out-of-range sentinels. In the current
+  // long-range setup, status=2 with 8191 consistently represents loss of a
+  // reliable target, not a finite-distance sensor fault. Treat that specific
+  // combination as NoTarget so proximity exit/rearm timers can progress.
+  if (rangeStatus == 4 ||
+      (rangeStatus == 2 && distanceMm >= 8190 && distanceMm <= maximumDistanceMm)) {
     return TofSample{TofSampleKind::NoTarget, distanceMm};
   }
+
   return TofSample{TofSampleKind::Invalid, distanceMm};
 }
 
@@ -53,7 +62,10 @@ TofInteractionUpdate updateTofInteraction(
   }
 
   const bool hasValidDistance = sample.kind == TofSampleKind::ValidDistance;
-  const bool nearby = hasValidDistance && sample.distanceMm < config.personNearThresholdMm;
+  const bool personDistancePlausible =
+    hasValidDistance && sample.distanceMm >= TOF_PERSON_MIN_DISTANCE_MM;
+  const bool nearby =
+    personDistancePlausible && sample.distanceMm < config.personNearThresholdMm;
   if (nearby) {
     state.proximityExitCandidateActive = false;
     state.proximityExitStartedAt = 0;

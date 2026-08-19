@@ -14,6 +14,7 @@ static const uint16_t TOF_CLOTH_TAKEN_THRESHOLD_MM = 600;
 static const unsigned long TOF_CLOTH_CONFIRM_MS = 500;
 static const uint16_t TOF_CLOTH_RELEASE_THRESHOLD_MM = 800;
 static const unsigned long TOF_CLOTH_REARM_MS = 1000;
+static const uint32_t TOF_LONG_RANGE_TIMING_BUDGET_US = 33000;
 static TofInteractionState tofInteractionState{};
 static bool clothTakenReportPending = false;
 static const TofInteractionConfig tofInteractionConfig{
@@ -24,6 +25,50 @@ static const TofInteractionConfig tofInteractionConfig{
   TOF_CLOTH_RELEASE_THRESHOLD_MM,
   TOF_CLOTH_REARM_MS,
 };
+
+static bool configureTofLongRange() {
+  // lox.begin() first applies Adafruit's DEFAULT preset, which enables the
+  // range-ignore threshold. A clean LONG_RANGE initialization does not enable
+  // that check, so explicitly disable it before applying long-range limits.
+  const FixPoint1616_t signalRateLimit =
+    static_cast<FixPoint1616_t>(0.1f * 65536.0f);
+  const FixPoint1616_t sigmaLimit =
+    static_cast<FixPoint1616_t>(60.0f * 65536.0f);
+
+  bool ok = true;
+  ok = lox.setLimitCheckEnable(
+         VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE,
+         1
+       ) && ok;
+  ok = lox.setLimitCheckEnable(
+         VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE,
+         1
+       ) && ok;
+  ok = lox.setLimitCheckEnable(
+         VL53L0X_CHECKENABLE_RANGE_IGNORE_THRESHOLD,
+         0
+       ) && ok;
+  ok = lox.setLimitCheckValue(
+         VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE,
+         signalRateLimit
+       ) && ok;
+  ok = lox.setLimitCheckValue(
+         VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE,
+         sigmaLimit
+       ) && ok;
+  ok = lox.setMeasurementTimingBudgetMicroSeconds(
+         TOF_LONG_RANGE_TIMING_BUDGET_US
+       ) && ok;
+  ok = lox.setVcselPulsePeriod(VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18) && ok;
+  ok = lox.setVcselPulsePeriod(VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14) && ok;
+
+  DEBUG_SERIAL.printf(
+    "[TOF] long range config %s, budget=%luus\n",
+    ok ? "ok" : "failed",
+    static_cast<unsigned long>(TOF_LONG_RANGE_TIMING_BUDGET_US)
+  );
+  return ok;
+}
 
 static bool i2cDeviceResponds(uint8_t address) {
   Wire.beginTransmission(address);
@@ -45,6 +90,10 @@ void setupHardwareAndSensors() {
     diagnosticLogSensor("VL53L0X init failed", true);
   } else {
     DEBUG_SERIAL.println("VL53L0X 初始化成功");
+    const bool longRangeOk = configureTofLongRange();
+    if (!longRangeOk) {
+      diagnosticLogSensor("VL53L0X long range config failed", true);
+    }
     tofReady = true;
   }
 
