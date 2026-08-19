@@ -114,6 +114,36 @@ void test_sensor_failure_breaks_continuous_far_confirmation() {
   TEST_ASSERT_FALSE(confirmed.nearby);
 }
 
+void test_zero_distance_does_not_mark_person_nearby() {
+  TofInteractionState state{};
+
+  TofInteractionUpdate update = updateTofInteraction(state, 0, 100, config());
+
+  TEST_ASSERT_FALSE(update.proximityChanged);
+  TEST_ASSERT_FALSE(update.nearby);
+}
+
+void test_person_minimum_distance_is_inclusive() {
+  TofInteractionState state{};
+
+  TofInteractionUpdate update = updateTofInteraction(state, 30, 100, config());
+
+  TEST_ASSERT_TRUE(update.proximityChanged);
+  TEST_ASSERT_TRUE(update.nearby);
+}
+
+void test_too_close_distance_still_participates_in_cloth_take_detection() {
+  TofInteractionState state{};
+
+  TofInteractionUpdate started = updateTofInteraction(state, 20, 100, config());
+  TofInteractionUpdate confirmed = updateTofInteraction(state, 20, 600, config());
+
+  TEST_ASSERT_FALSE(started.nearby);
+  TEST_ASSERT_FALSE(started.clothTaken);
+  TEST_ASSERT_FALSE(confirmed.nearby);
+  TEST_ASSERT_TRUE(confirmed.clothTaken);
+}
+
 void test_take_requires_600mm_for_full_500ms() {
   TofInteractionState state{};
 
@@ -190,6 +220,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_status_2_out_of_range_sentinel_exits_after_500ms);
   RUN_TEST(test_status_2_with_finite_distance_remains_invalid);
   RUN_TEST(test_sensor_failure_breaks_continuous_far_confirmation);
+  RUN_TEST(test_zero_distance_does_not_mark_person_nearby);
+  RUN_TEST(test_person_minimum_distance_is_inclusive);
+  RUN_TEST(test_too_close_distance_still_participates_in_cloth_take_detection);
   RUN_TEST(test_take_requires_600mm_for_full_500ms);
   RUN_TEST(test_take_candidate_is_cancelled_when_distance_returns_to_600mm);
   RUN_TEST(test_no_target_cancels_take_candidate);
