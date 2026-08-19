@@ -73,8 +73,27 @@ void test_initial_no_target_publishes_not_near_after_500ms() {
   TEST_ASSERT_FALSE(confirmed.clothTaken);
 }
 
-void test_sensor_failure_is_not_classified_as_no_target() {
-  TofSample failure = classifyTofSample(2, 8190, 8200);
+void test_status_2_out_of_range_sentinel_is_no_target() {
+  TofSample noTarget = classifyTofSample(2, 8191, 8200);
+
+  TEST_ASSERT_EQUAL_INT((int)TofSampleKind::NoTarget, (int)noTarget.kind);
+}
+
+void test_status_2_out_of_range_sentinel_exits_after_500ms() {
+  TofInteractionState state{};
+  updateTofInteraction(state, 1000, 0, config());
+  TofSample noTarget = classifyTofSample(2, 8191, 8200);
+
+  TEST_ASSERT_FALSE(updateTofInteraction(state, noTarget, 100, config()).proximityChanged);
+  TEST_ASSERT_TRUE(updateTofInteraction(state, noTarget, 599, config()).nearby);
+
+  TofInteractionUpdate confirmed = updateTofInteraction(state, noTarget, 600, config());
+  TEST_ASSERT_TRUE(confirmed.proximityChanged);
+  TEST_ASSERT_FALSE(confirmed.nearby);
+}
+
+void test_status_2_with_finite_distance_remains_invalid() {
+  TofSample failure = classifyTofSample(2, 700, 8200);
 
   TEST_ASSERT_EQUAL_INT((int)TofSampleKind::Invalid, (int)failure.kind);
 }
@@ -82,7 +101,7 @@ void test_sensor_failure_is_not_classified_as_no_target() {
 void test_sensor_failure_breaks_continuous_far_confirmation() {
   TofInteractionState state{};
   TofSample noTarget = classifyTofSample(4, 8190, 8200);
-  TofSample failure = classifyTofSample(2, 8190, 8200);
+  TofSample failure = classifyTofSample(2, 700, 8200);
   updateTofInteraction(state, 1000, 0, config());
 
   updateTofInteraction(state, noTarget, 100, config());
@@ -167,7 +186,9 @@ int main(int argc, char** argv) {
   RUN_TEST(test_valid_far_distance_requires_500ms_before_exit);
   RUN_TEST(test_range_status_4_is_no_target_and_exits_after_500ms);
   RUN_TEST(test_initial_no_target_publishes_not_near_after_500ms);
-  RUN_TEST(test_sensor_failure_is_not_classified_as_no_target);
+  RUN_TEST(test_status_2_out_of_range_sentinel_is_no_target);
+  RUN_TEST(test_status_2_out_of_range_sentinel_exits_after_500ms);
+  RUN_TEST(test_status_2_with_finite_distance_remains_invalid);
   RUN_TEST(test_sensor_failure_breaks_continuous_far_confirmation);
   RUN_TEST(test_take_requires_600mm_for_full_500ms);
   RUN_TEST(test_take_candidate_is_cancelled_when_distance_returns_to_600mm);
