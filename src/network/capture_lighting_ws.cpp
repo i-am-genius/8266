@@ -18,8 +18,11 @@ static bool handleCaptureLightingMessage(const String& text) {
     payload = root["data"].as<JsonObject>();
   }
 
-  String type = root["type"] | payload["type"] | "";
-  if (type != "captureLighting") {
+  String messageType = root["type"] | "";
+  if (messageType.length() == 0) {
+    messageType = payload["type"] | "";
+  }
+  if (messageType != "captureLighting") {
     return false;
   }
 
