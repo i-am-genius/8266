@@ -15,6 +15,7 @@ static const unsigned long TOF_CLOTH_CONFIRM_MS = 500;
 static const uint16_t TOF_CLOTH_RELEASE_THRESHOLD_MM = 800;
 static const unsigned long TOF_CLOTH_REARM_MS = 1000;
 static const unsigned long TOF_NANO_DEBUG_INTERVAL_MS = 250;
+static const uint32_t TOF_LONG_RANGE_TIMING_BUDGET_US = 33000;
 static TofInteractionState tofInteractionState{};
 static bool clothTakenReportPending = false;
 static const TofInteractionConfig tofInteractionConfig{
@@ -38,6 +39,66 @@ static const char* tofSampleKindName(TofSampleKind kind) {
   }
 }
 
+static float fixedPoint1616ToFloat(FixPoint1616_t value) {
+  return static_cast<float>(value) / 65536.0f;
+}
+
+static bool configureTofLongRange() {
+  // Equivalent to Adafruit's VL53L0X_SENSE_LONG_RANGE preset, but use the
+  // public wrappers directly so configSensor() cannot print unframed text to
+  // Serial, which is also the Nano protocol UART in this firmware.
+  const FixPoint1616_t signalRateLimit =
+    static_cast<FixPoint1616_t>(0.1f * 65536.0f);
+  const FixPoint1616_t sigmaLimit =
+    static_cast<FixPoint1616_t>(60.0f * 65536.0f);
+
+  bool ok = true;
+  ok = lox.setLimitCheckValue(
+         VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE,
+         signalRateLimit
+       ) && ok;
+  ok = lox.setLimitCheckValue(
+         VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE,
+         sigmaLimit
+       ) && ok;
+  ok = lox.setMeasurementTimingBudgetMicroSeconds(
+         TOF_LONG_RANGE_TIMING_BUDGET_US
+       ) && ok;
+  ok = lox.setVcselPulsePeriod(VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18) && ok;
+  ok = lox.setVcselPulsePeriod(VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14) && ok;
+
+  const uint32_t budgetUs = lox.getMeasurementTimingBudgetMicroSeconds();
+  const uint8_t preVcsel = lox.getVcselPulsePeriod(VL53L0X_VCSEL_PERIOD_PRE_RANGE);
+  const uint8_t finalVcsel = lox.getVcselPulsePeriod(VL53L0X_VCSEL_PERIOD_FINAL_RANGE);
+  const float signalLimitMcps = fixedPoint1616ToFloat(
+    lox.getLimitCheckValue(VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE)
+  );
+  const float sigmaLimitMm = fixedPoint1616ToFloat(
+    lox.getLimitCheckValue(VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE)
+  );
+
+  nanoSerial.printf(
+    "#TOF_CONFIG mode=LONG_RANGE ok=%u budgetUs=%lu preVcsel=%u finalVcsel=%u sigLimit=%.3f sigmaLimit=%.1f\n",
+    ok ? 1U : 0U,
+    static_cast<unsigned long>(budgetUs),
+    preVcsel,
+    finalVcsel,
+    signalLimitMcps,
+    sigmaLimitMm
+  );
+
+  DEBUG_SERIAL.printf(
+    "[TOF] long range ok=%d budget=%luus pre=%u final=%u sig=%.3f sigma=%.1f\n",
+    ok ? 1 : 0,
+    static_cast<unsigned long>(budgetUs),
+    preVcsel,
+    finalVcsel,
+    signalLimitMcps,
+    sigmaLimitMm
+  );
+  return ok;
+}
+
 static void printTofDebugToNano(
   const VL53L0X_RangingMeasurementData_t& measure,
   const TofSample& sample,
@@ -55,13 +116,23 @@ static void printTofDebugToNano(
     exitElapsed = now - tofInteractionState.proximityExitStartedAt;
   }
 
+  const float signalMcps = fixedPoint1616ToFloat(measure.SignalRateRtnMegaCps);
+  const float ambientMcps = fixedPoint1616ToFloat(measure.AmbientRateRtnMegaCps);
+  const float effectiveSpads =
+    static_cast<float>(measure.EffectiveSpadRtnCount) / 256.0f;
+
   // Temporary diagnostic line on the Nano protocol UART. Prefix with '#TOF'
   // so it is visually distinct from the normal one-letter motor commands.
   nanoSerial.printf(
-    "#TOF t=%lu status=%u raw=%u kind=%s usable=%u init=%u nearby=%u changed=%u exit=%u exitMs=%lu cloth=%u\n",
+    "#TOF t=%lu status=%u raw=%u dmax=%u sig=%.3f amb=%.3f spad=%.2f measUs=%lu kind=%s usable=%u init=%u nearby=%u changed=%u exit=%u exitMs=%lu cloth=%u\n",
     now,
     measure.RangeStatus,
     measure.RangeMilliMeter,
+    measure.RangeDMaxMilliMeter,
+    signalMcps,
+    ambientMcps,
+    effectiveSpads,
+    static_cast<unsigned long>(measure.MeasurementTimeUsec),
     tofSampleKindName(sample.kind),
     sample.kind != TofSampleKind::Invalid ? 1U : 0U,
     tofInteractionState.proximityInitialized ? 1U : 0U,
@@ -93,6 +164,10 @@ void setupHardwareAndSensors() {
     diagnosticLogSensor("VL53L0X init failed", true);
   } else {
     DEBUG_SERIAL.println("VL53L0X 初始化成功");
+    const bool longRangeOk = configureTofLongRange();
+    if (!longRangeOk) {
+      diagnosticLogSensor("VL53L0X long range config failed", true);
+    }
     tofReady = true;
   }
 
