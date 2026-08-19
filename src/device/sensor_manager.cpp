@@ -44,15 +44,28 @@ static float fixedPoint1616ToFloat(FixPoint1616_t value) {
 }
 
 static bool configureTofLongRange() {
-  // Equivalent to Adafruit's VL53L0X_SENSE_LONG_RANGE preset, but use the
-  // public wrappers directly so configSensor() cannot print unframed text to
-  // Serial, which is also the Nano protocol UART in this firmware.
+  // lox.begin() first applies Adafruit's DEFAULT preset, which enables the
+  // range-ignore threshold. A clean LONG_RANGE initialization does not enable
+  // that check, so explicitly turn it off before applying the long-range
+  // limits. Otherwise the inherited default check can keep producing status=2.
   const FixPoint1616_t signalRateLimit =
     static_cast<FixPoint1616_t>(0.1f * 65536.0f);
   const FixPoint1616_t sigmaLimit =
     static_cast<FixPoint1616_t>(60.0f * 65536.0f);
 
   bool ok = true;
+  ok = lox.setLimitCheckEnable(
+         VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE,
+         1
+       ) && ok;
+  ok = lox.setLimitCheckEnable(
+         VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE,
+         1
+       ) && ok;
+  ok = lox.setLimitCheckEnable(
+         VL53L0X_CHECKENABLE_RANGE_IGNORE_THRESHOLD,
+         0
+       ) && ok;
   ok = lox.setLimitCheckValue(
          VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE,
          signalRateLimit
@@ -70,31 +83,51 @@ static bool configureTofLongRange() {
   const uint32_t budgetUs = lox.getMeasurementTimingBudgetMicroSeconds();
   const uint8_t preVcsel = lox.getVcselPulsePeriod(VL53L0X_VCSEL_PERIOD_PRE_RANGE);
   const uint8_t finalVcsel = lox.getVcselPulsePeriod(VL53L0X_VCSEL_PERIOD_FINAL_RANGE);
+  const uint8_t signalCheck = lox.getLimitCheckEnable(
+    VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE
+  );
+  const uint8_t sigmaCheck = lox.getLimitCheckEnable(
+    VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE
+  );
+  const uint8_t ritCheck = lox.getLimitCheckEnable(
+    VL53L0X_CHECKENABLE_RANGE_IGNORE_THRESHOLD
+  );
   const float signalLimitMcps = fixedPoint1616ToFloat(
     lox.getLimitCheckValue(VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE)
   );
   const float sigmaLimitMm = fixedPoint1616ToFloat(
     lox.getLimitCheckValue(VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE)
   );
+  const float ritLimitMcps = fixedPoint1616ToFloat(
+    lox.getLimitCheckValue(VL53L0X_CHECKENABLE_RANGE_IGNORE_THRESHOLD)
+  );
 
   nanoSerial.printf(
-    "#TOF_CONFIG mode=LONG_RANGE ok=%u budgetUs=%lu preVcsel=%u finalVcsel=%u sigLimit=%.3f sigmaLimit=%.1f\n",
+    "#TOF_CONFIG mode=LONG_RANGE ok=%u budgetUs=%lu preVcsel=%u finalVcsel=%u sigCheck=%u sigmaCheck=%u ritCheck=%u sigLimit=%.3f sigmaLimit=%.1f ritLimit=%.4f\n",
     ok ? 1U : 0U,
     static_cast<unsigned long>(budgetUs),
     preVcsel,
     finalVcsel,
+    signalCheck,
+    sigmaCheck,
+    ritCheck,
     signalLimitMcps,
-    sigmaLimitMm
+    sigmaLimitMm,
+    ritLimitMcps
   );
 
   DEBUG_SERIAL.printf(
-    "[TOF] long range ok=%d budget=%luus pre=%u final=%u sig=%.3f sigma=%.1f\n",
+    "[TOF] long range ok=%d budget=%luus pre=%u final=%u sigCheck=%u sigmaCheck=%u ritCheck=%u sig=%.3f sigma=%.1f rit=%.4f\n",
     ok ? 1 : 0,
     static_cast<unsigned long>(budgetUs),
     preVcsel,
     finalVcsel,
+    signalCheck,
+    sigmaCheck,
+    ritCheck,
     signalLimitMcps,
-    sigmaLimitMm
+    sigmaLimitMm,
+    ritLimitMcps
   );
   return ok;
 }
