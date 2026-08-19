@@ -1,6 +1,7 @@
 name: Feature CI
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - agent/garment-calibration-source-lighting
