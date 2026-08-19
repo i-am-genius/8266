@@ -3,6 +3,7 @@
 #include "network/wifi_manager.h"
 #include "network/http_reporter.h"
 #include "network/ws_client.h"
+#include "network/capture_lighting_ws.h"
 #include "device/light_control.h"
 #include "device/sensor_manager.h"
 #include "device/ota_manager.h"
@@ -14,18 +15,12 @@
 #include "diagnostics/diagnostic_logger.h"
 #include "runtime/loop_policy.h"
 
-// ==================== HTTP 烟雾测试 ====================
-// 启用后固件只做 WiFi + HTTP announce，排除其他所有模块干扰
-
-
-// ===================== 传感器 / 外设 实例 =====================
 BH1750 lightMeter;
 Adafruit_VL53L0X lox = Adafruit_VL53L0X();
 WebSocketsClient webSocket;
 ESP8266WebServer server(80);
 WiFiUDP udp;
 
-// ===================== 运行状态 =====================
 bool bh1750Ready = false;
 bool tofReady = false;
 bool fsReady = false;
@@ -76,7 +71,6 @@ bool bootSelfTestReportDone = false;
 IPAddress cachedBroadcastIP;
 bool broadcastIPCached = false;
 
-// ===================== 灯光控制参数 =====================
 int brightness = 80;
 int temp = 4000;
 bool autoMode = true;
@@ -98,7 +92,6 @@ unsigned long effectStartMs = 0;
 unsigned long lastEffectUpdateMs = 0;
 const unsigned long WAVE_UPDATE_INTERVAL_MS = 80;
 
-// ===================== Nano 云台 / 滑轨控制参数 =====================
 int panDeg = 0;
 int tiltDeg = 0;
 int sliderMm = 0;
@@ -108,18 +101,15 @@ int panSpeedDeg = 30;
 int tiltSpeedDeg = 45;
 int sliderSpeedMm = 120;
 
-// ===================== 设备配置 =====================
 DeviceConfig cfg;
 String deviceId;
 
-// ===================== setup / loop =====================
 void setup() {
   Serial.begin(NANO_BAUD);
   DEBUG_SERIAL.begin(115200);
   delay(200);
 
   logInit();
-
   deviceId = makeDeviceId();
 
   DEBUG_SERIAL.println("\n========================");
@@ -127,10 +117,8 @@ void setup() {
   DEBUG_SERIAL.println("ID = " + deviceId);
   DEBUG_SERIAL.println("FW = " + String(FW_VERSION));
   DEBUG_SERIAL.println("========================");
-
   LOG_INFO("BOOT", String("设备启动 ID=" + deviceId + " FW=" + String(FW_VERSION)).c_str());
 
-  // Nano 自主播放开机动画；8266 初始化完成并收到后端默认服装位置后直接发送 F。
   pollNano();
   handleNanoStartupSync();
 
@@ -147,7 +135,6 @@ void setup() {
   bool hasConfig = loadConfig();
   bool wifiOk = false;
 
-  // Set log server after config is loaded
   String logHost = cfg.serverHost.length() > 0 ? cfg.serverHost : String(DEFAULT_SERVER_HOST);
   uint16_t logPort = cfg.httpPort > 0 ? cfg.httpPort : DEFAULT_HTTP_PORT;
   const char* logSecret = cfg.uploadSecret.length() > 0 ? cfg.uploadSecret.c_str() : nullptr;
@@ -171,11 +158,11 @@ void setup() {
   }
 
   LOG_INFO("BOOT", String("WiFi 已连接 IP=" + WiFi.localIP().toString()).c_str());
-
   broadcastIPCached = false;
   setupDeviceHttpServer();
   LOG_INFO("BOOT", "开始连接 WebSocket；announce 将在主循环异步调度");
   beginWebSocketClient();
+  installCaptureLightingWsInterceptor();
 }
 
 void loop() {
@@ -197,25 +184,28 @@ void loop() {
 
   if (otaInProgress) return;
 
-  // 摇杆连续运动更新 (每帧)
   updateArmJoystickMotion();
   handleSelfTestTask();
   const bool runNonCriticalHttp = shouldRunNonCriticalHttp(
     effectWaveEnabled,
     isPersonTrackingAimActive()
-  );
+  ) && !isCaptureLightingOverrideActive();
   if (runNonCriticalHttp) {
     handleDeviceStateReportTask();
   }
-  handleLocateBreathTask();
 
   broadcastDevice();
 
-  if (!isLocateBreathActive()) {
-    if (effectWaveEnabled) {
-      updateEffectLoop();
-    } else {
-      updateLightingByToF();
+  if (isCaptureLightingOverrideActive()) {
+    handleCaptureLightingOverrideTask();
+  } else {
+    handleLocateBreathTask();
+    if (!isLocateBreathActive()) {
+      if (effectWaveEnabled) {
+        updateEffectLoop();
+      } else {
+        updateLightingByToF();
+      }
     }
   }
 
@@ -226,6 +216,7 @@ void loop() {
     sendAnnounce();
     if (backendDeviceAdded && !wsClientStarted) {
       beginWebSocketClient();
+      installCaptureLightingWsInterceptor();
     }
   }
 

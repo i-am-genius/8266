@@ -9,3 +9,8 @@ bool isLocateBreathActive();
 void handleLocateBreathTask();
 void updateEffectLoop();
 void safeCopyFabric(const char* src);
+
+void startCaptureLightingOverride(int brightness, int temp, unsigned long ttlMs);
+void stopCaptureLightingOverride();
+bool isCaptureLightingOverrideActive();
+void handleCaptureLightingOverrideTask();
