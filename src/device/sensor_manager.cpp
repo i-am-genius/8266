@@ -14,7 +14,6 @@ static const uint16_t TOF_CLOTH_TAKEN_THRESHOLD_MM = 600;
 static const unsigned long TOF_CLOTH_CONFIRM_MS = 500;
 static const uint16_t TOF_CLOTH_RELEASE_THRESHOLD_MM = 800;
 static const unsigned long TOF_CLOTH_REARM_MS = 1000;
-static const unsigned long TOF_NANO_DEBUG_INTERVAL_MS = 250;
 static const uint32_t TOF_LONG_RANGE_TIMING_BUDGET_US = 33000;
 static TofInteractionState tofInteractionState{};
 static bool clothTakenReportPending = false;
@@ -27,27 +26,10 @@ static const TofInteractionConfig tofInteractionConfig{
   TOF_CLOTH_REARM_MS,
 };
 
-static const char* tofSampleKindName(TofSampleKind kind) {
-  switch (kind) {
-    case TofSampleKind::ValidDistance:
-      return "VALID";
-    case TofSampleKind::NoTarget:
-      return "NO_TARGET";
-    case TofSampleKind::Invalid:
-    default:
-      return "INVALID";
-  }
-}
-
-static float fixedPoint1616ToFloat(FixPoint1616_t value) {
-  return static_cast<float>(value) / 65536.0f;
-}
-
 static bool configureTofLongRange() {
   // lox.begin() first applies Adafruit's DEFAULT preset, which enables the
   // range-ignore threshold. A clean LONG_RANGE initialization does not enable
-  // that check, so explicitly turn it off before applying the long-range
-  // limits. Otherwise the inherited default check can keep producing status=2.
+  // that check, so explicitly disable it before applying long-range limits.
   const FixPoint1616_t signalRateLimit =
     static_cast<FixPoint1616_t>(0.1f * 65536.0f);
   const FixPoint1616_t sigmaLimit =
@@ -80,101 +62,12 @@ static bool configureTofLongRange() {
   ok = lox.setVcselPulsePeriod(VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18) && ok;
   ok = lox.setVcselPulsePeriod(VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14) && ok;
 
-  const uint32_t budgetUs = lox.getMeasurementTimingBudgetMicroSeconds();
-  const uint8_t preVcsel = lox.getVcselPulsePeriod(VL53L0X_VCSEL_PERIOD_PRE_RANGE);
-  const uint8_t finalVcsel = lox.getVcselPulsePeriod(VL53L0X_VCSEL_PERIOD_FINAL_RANGE);
-  const uint8_t signalCheck = lox.getLimitCheckEnable(
-    VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE
-  );
-  const uint8_t sigmaCheck = lox.getLimitCheckEnable(
-    VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE
-  );
-  const uint8_t ritCheck = lox.getLimitCheckEnable(
-    VL53L0X_CHECKENABLE_RANGE_IGNORE_THRESHOLD
-  );
-  const float signalLimitMcps = fixedPoint1616ToFloat(
-    lox.getLimitCheckValue(VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE)
-  );
-  const float sigmaLimitMm = fixedPoint1616ToFloat(
-    lox.getLimitCheckValue(VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE)
-  );
-  const float ritLimitMcps = fixedPoint1616ToFloat(
-    lox.getLimitCheckValue(VL53L0X_CHECKENABLE_RANGE_IGNORE_THRESHOLD)
-  );
-
-  nanoSerial.printf(
-    "#TOF_CONFIG mode=LONG_RANGE ok=%u budgetUs=%lu preVcsel=%u finalVcsel=%u sigCheck=%u sigmaCheck=%u ritCheck=%u sigLimit=%.3f sigmaLimit=%.1f ritLimit=%.4f\n",
-    ok ? 1U : 0U,
-    static_cast<unsigned long>(budgetUs),
-    preVcsel,
-    finalVcsel,
-    signalCheck,
-    sigmaCheck,
-    ritCheck,
-    signalLimitMcps,
-    sigmaLimitMm,
-    ritLimitMcps
-  );
-
   DEBUG_SERIAL.printf(
-    "[TOF] long range ok=%d budget=%luus pre=%u final=%u sigCheck=%u sigmaCheck=%u ritCheck=%u sig=%.3f sigma=%.1f rit=%.4f\n",
-    ok ? 1 : 0,
-    static_cast<unsigned long>(budgetUs),
-    preVcsel,
-    finalVcsel,
-    signalCheck,
-    sigmaCheck,
-    ritCheck,
-    signalLimitMcps,
-    sigmaLimitMm,
-    ritLimitMcps
+    "[TOF] long range config %s, budget=%luus\n",
+    ok ? "ok" : "failed",
+    static_cast<unsigned long>(TOF_LONG_RANGE_TIMING_BUDGET_US)
   );
   return ok;
-}
-
-static void printTofDebugToNano(
-  const VL53L0X_RangingMeasurementData_t& measure,
-  const TofSample& sample,
-  const TofInteractionUpdate& interaction,
-  unsigned long now
-) {
-  static unsigned long lastDebugAt = 0;
-  if (now - lastDebugAt < TOF_NANO_DEBUG_INTERVAL_MS) {
-    return;
-  }
-  lastDebugAt = now;
-
-  unsigned long exitElapsed = 0;
-  if (tofInteractionState.proximityExitCandidateActive) {
-    exitElapsed = now - tofInteractionState.proximityExitStartedAt;
-  }
-
-  const float signalMcps = fixedPoint1616ToFloat(measure.SignalRateRtnMegaCps);
-  const float ambientMcps = fixedPoint1616ToFloat(measure.AmbientRateRtnMegaCps);
-  const float effectiveSpads =
-    static_cast<float>(measure.EffectiveSpadRtnCount) / 256.0f;
-
-  // Temporary diagnostic line on the Nano protocol UART. Prefix with '#TOF'
-  // so it is visually distinct from the normal one-letter motor commands.
-  nanoSerial.printf(
-    "#TOF t=%lu status=%u raw=%u dmax=%u sig=%.3f amb=%.3f spad=%.2f measUs=%lu kind=%s usable=%u init=%u nearby=%u changed=%u exit=%u exitMs=%lu cloth=%u\n",
-    now,
-    measure.RangeStatus,
-    measure.RangeMilliMeter,
-    measure.RangeDMaxMilliMeter,
-    signalMcps,
-    ambientMcps,
-    effectiveSpads,
-    static_cast<unsigned long>(measure.MeasurementTimeUsec),
-    tofSampleKindName(sample.kind),
-    sample.kind != TofSampleKind::Invalid ? 1U : 0U,
-    tofInteractionState.proximityInitialized ? 1U : 0U,
-    interaction.nearby ? 1U : 0U,
-    interaction.proximityChanged ? 1U : 0U,
-    tofInteractionState.proximityExitCandidateActive ? 1U : 0U,
-    exitElapsed,
-    interaction.clothTaken ? 1U : 0U
-  );
 }
 
 static bool i2cDeviceResponds(uint8_t address) {
@@ -283,7 +176,6 @@ void updateLightingByToF() {
     now,
     tofInteractionConfig
   );
-  printTofDebugToNano(measure, tofSample, interaction, now);
   if (!tofSampleUsable) return;
 
   static bool wasNearby = false;
