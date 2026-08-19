@@ -3,6 +3,7 @@
 #include "network/wifi_manager.h"
 #include "network/http_reporter.h"
 #include "network/ws_client.h"
+#include "network/capture_lighting_ws.h"
 #include "device/light_control.h"
 #include "device/sensor_manager.h"
 #include "device/ota_manager.h"
@@ -161,6 +162,7 @@ void setup() {
   setupDeviceHttpServer();
   LOG_INFO("BOOT", "开始连接 WebSocket；announce 将在主循环异步调度");
   beginWebSocketClient();
+  installCaptureLightingWsInterceptor();
 }
 
 void loop() {
@@ -214,6 +216,7 @@ void loop() {
     sendAnnounce();
     if (backendDeviceAdded && !wsClientStarted) {
       beginWebSocketClient();
+      installCaptureLightingWsInterceptor();
     }
   }
 
