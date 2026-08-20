@@ -92,6 +92,33 @@ void sendTiltTarget(float valueDeg) {
   sendNanoFloat('t', toTiltNanoCommandDeg(valueDeg));
 }
 
+void sendPersonTrackingPoseNoWait(float panDegValue, float tiltDegValue) {
+  const float panCommand = clampPanTargetDeg(panDegValue);
+  const float tiltCommand = toTiltNanoCommandDeg(tiltDegValue);
+
+  char panBuf[16];
+  char tiltBuf[16];
+  snprintf(panBuf, sizeof(panBuf), "%.2f", panCommand);
+  snprintf(tiltBuf, sizeof(tiltBuf), "%.2f", tiltCommand);
+
+  // Person tracking is a high-rate path. Write both commands back-to-back and
+  // let the normal loop poll Nano replies asynchronously. Keep the physical
+  // 30/48 tilt transmission ratio used by this lamp mechanism.
+  nanoSerial.print('p');
+  nanoSerial.print(panBuf);
+  nanoSerial.print('\n');
+  nanoSerial.print('t');
+  nanoSerial.print(tiltBuf);
+  nanoSerial.print('\n');
+
+  DEBUG_SERIAL.printf(
+    "[NANO] TX tracking p%s t%s (physical tilt=%.2f)\n",
+    panBuf,
+    tiltBuf,
+    tiltDegValue
+  );
+}
+
 void sendPanSpeed(float valueDegPerSec) {
   sendNanoFloat('s', max(0.0f, valueDegPerSec));
 }
