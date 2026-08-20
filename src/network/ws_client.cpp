@@ -1,5 +1,6 @@
 #include "network/ws_client.h"
 #include "network/arm_position_policy.h"
+#include "network/tracking_receiver.h"
 #include "device/light_control.h"
 #include "device/sensor_manager.h"
 #include "device/arm_controller.h"
@@ -114,17 +115,23 @@ static void applySelectedLampAim(const char* reason, bool force = false) {
   stopArmJoystickMotion();
   panDeg = (int)round(selected.pose.panDeg);
   tiltDeg = (int)round(selected.pose.tiltDeg);
-  sendPanTarget((float)panDeg);
-  sendTiltTarget((float)tiltDeg);
+
+  if (selected.source == LampAimSource::Person) {
+    sendPersonTrackingPoseNoWait(selected.pose.panDeg, selected.pose.tiltDeg);
+  } else {
+    sendPanTarget(selected.pose.panDeg);
+    sendTiltTarget(selected.pose.tiltDeg);
+  }
+
   lastAppliedAim = selected;
   appliedAimInitialized = true;
   diagnosticRecordArm(DIAG_SOURCE_WS, lampAimSourceName(selected.source), panDeg, tiltDeg, sliderMm);
   DEBUG_SERIAL.printf(
-    "[LAMP_AIM] source=%s reason=%s pan=%d tilt=%d slider=%d\n",
+    "[LAMP_AIM] source=%s reason=%s pan=%.2f tilt=%.2f slider=%d\n",
     lampAimSourceName(selected.source),
     reason ? reason : "state_changed",
-    panDeg,
-    tiltDeg,
+    selected.pose.panDeg,
+    selected.pose.tiltDeg,
     sliderMm
   );
 }
@@ -228,7 +235,8 @@ void startPersonTrackingAim() {
   lampAimState.personTrackingActive = true;
   lampAimState.personTargetValid = false;
   lampAimState.person = lampAimState.defaultPerson;
-  applySelectedLampAim("person_tracking_start", true);
+  // Arm only. The UDP receiver applies the first real person pose.
+  DEBUG_SERIAL.println("[LAMP_AIM] person tracking armed; waiting for first valid pose");
 }
 
 bool updatePersonTrackingAim(
@@ -410,7 +418,7 @@ void handleWsMessage(const String& text) {
       LightState before = diagnosticCurrentLightState();
       effectRestoreBrightness = autoMode ? recommendedBrightness : brightness;
       effectRestoreTemp = autoMode ? recommendedTemp : temp;
-      effectBaseTemp = constrain(payload["baseTemp"] | effectBaseTemp, 2700, 6500);
+      effectBaseTemp = payload["baseTemp"] | effectBaseTemp;
       int nextAmplitude = payload["range"] | effectRange;
       if (payload.containsKey("amplitude")) {
         nextAmplitude = payload["amplitude"] | nextAmplitude;
@@ -490,13 +498,25 @@ void handleWsMessage(const String& text) {
   }
 
   if (type == "lampTrackingStart") {
-    startPersonTrackingAim();
-    DEBUG_SERIAL.println("[LAMP_AIM] person tracking session started");
+    const String sessionId = payload["sessionId"] | "";
+    const String camChipId = payload["camChipId"] | "";
+    const String camIp = payload["camIp"] | "";
+    const uint16_t udpPort = payload["udpPort"] | 4211;
+    if (!armTrackingUdpSession(sessionId, camChipId, camIp, udpPort)) {
+      DEBUG_SERIAL.println("[TRACK_UDP] lampTrackingStart rejected");
+      diagnosticLogWs("invalid lampTrackingStart", true);
+    }
     return;
   }
 
   if (type == "lampTrackingStop") {
-    stopPersonTrackingAim();
+    const String sessionId = payload["sessionId"] | "";
+    if (sessionId.length() > 0 && isTrackingUdpArmed() && !trackingUdpSessionMatches(sessionId)) {
+      DEBUG_SERIAL.println("[TRACK_UDP] stale lampTrackingStop ignored");
+      return;
+    }
+    const String reason = payload["reason"] | "tracking stopped";
+    stopTrackingUdpSession(reason.c_str(), true);
     if (payload["clearClothTaken"] | false) {
       clearClothTakenState();
     }
@@ -521,15 +541,23 @@ void handleWsMessage(const String& text) {
     stopArmJoystickMotion();
 
     if (payload.containsKey("pan")) {
-      panDeg = (int)clampPanTargetDeg(payload["pan"].as<int>());
-      sendPanTarget(panDeg);
-      changed = true;
+      const float requestedPan = payload["pan"].as<float>();
+      if (isfinite(requestedPan)) {
+        const float appliedPan = clampPanTargetDeg(requestedPan);
+        panDeg = (int)round(appliedPan);
+        sendPanTarget(appliedPan);
+        changed = true;
+      }
     }
 
     if (payload.containsKey("tilt")) {
-      tiltDeg = (int)clampTiltTargetDeg(payload["tilt"].as<int>());
-      sendTiltTarget(tiltDeg);
-      changed = true;
+      const float requestedTilt = payload["tilt"].as<float>();
+      if (isfinite(requestedTilt)) {
+        const float appliedTilt = clampTiltTargetDeg(requestedTilt);
+        tiltDeg = (int)round(appliedTilt);
+        sendTiltTarget(appliedTilt);
+        changed = true;
+      }
     }
 
     if (payload.containsKey("slider")) {
@@ -641,6 +669,7 @@ void handleWsMessage(const String& text) {
       DEBUG_SERIAL.println("[OTA] Cross-channel OTA allowed");
     }
 
+    stopTrackingUdpSession("OTA starting", false);
     stopLocateBreath(true);
     doOtaUpdate(url, version, versionCode, channel, md5);
     return;
@@ -691,6 +720,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
       wsConnected = false;
+      stopTrackingUdpSession("backend websocket disconnected", false);
       DEBUG_SERIAL.print("[WS] 已断开");
       if (payload && length > 0) {
         DEBUG_SERIAL.print(": ");
