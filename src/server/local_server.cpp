@@ -111,6 +111,12 @@ void handleArmJoystick() {
     return;
   }
 
+  if (isCollisionParkActive()) {
+    stopArmJoystickMotion();
+    server.send(423, "application/json", "{\"error\":\"collision park active\"}");
+    return;
+  }
+
   if (!server.hasArg("plain")) {
     server.send(400, "application/json", "{\"error\":\"缺少 body\"}");
     return;
