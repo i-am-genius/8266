@@ -1,5 +1,6 @@
 #include "device/sensor_manager.h"
 #include "device/light_control.h"
+#include "device/lux_auto_policy.h"
 #include "device/tof_interaction_state.h"
 #include "network/http_reporter.h"
 #include "network/ws_client.h"
@@ -8,6 +9,17 @@
 static ThresholdGate tofReadGate{};
 static ThresholdGate bh1750ReadGate{};
 static const uint8_t BH1750_I2C_ADDRESS = 0x23;
+static const unsigned long BH1750_CONTROL_INTERVAL_MS = 250;
+static const LuxAutoConfig luxAutoConfig{
+  0.35f,  // EMA alpha: react quickly while filtering short spikes
+  20.0f,  // target deadband in lux
+  75.0f,  // lux error represented by one brightness step
+  2,      // maximum brightness change per sample
+  15,     // BH1750 may only trim the configured base by +/-15
+  5,
+  100,
+};
+static LuxAutoState luxAutoState{0.0f, 50, false};
 static const uint16_t TOF_PERSON_NEAR_THRESHOLD_MM = 2000;
 static const unsigned long TOF_PROXIMITY_EXIT_CONFIRM_MS = 500;
 static const uint16_t TOF_CLOTH_TAKEN_THRESHOLD_MM = 600;
@@ -225,9 +237,14 @@ void updateLightingByToF() {
     }
   }
 
-  // ---- Lux P 控制器：无人时根据环境光自动调节亮度 ----
+  // ---- BH1750 ambient trim: fast sampling with bounded influence ----
+  // Only learn the idle-light correction while nobody is nearby. Otherwise the
+  // brighter garment lighting would contaminate the next idle brightness.
   static unsigned long lastLuxAutoRead = 0;
-  if (autoMode && bh1750Ready && (now - lastLuxAutoRead > 2000)) {
+  if (autoMode
+      && !wasNearby
+      && bh1750Ready
+      && (now - lastLuxAutoRead >= BH1750_CONTROL_INTERVAL_MS)) {
     float lux = lightMeter.readLightLevel();
     bool luxValid = isfinite(lux) && lux >= 0.0f;
     FailureDecision luxDecision = thresholdGateRecord(bh1750ReadGate, luxValid, 3);
@@ -237,9 +254,24 @@ void updateLightingByToF() {
       diagnosticLogSensor("BH1750 reads recovered");
     }
     if (luxValid) {
-      int error = luxAutoTarget - (int)lux;
-      luxAutoBrightness += (int)(error * 0.1f);
-      luxAutoBrightness = constrain(luxAutoBrightness, 5, 100);
+      const int previousBrightness = luxAutoBrightness;
+      luxAutoState = updateLuxAutoControl(
+        luxAutoState,
+        lux,
+        luxAutoTarget,
+        brightness,
+        luxAutoConfig
+      );
+      luxAutoBrightness = luxAutoState.brightness;
+      if (luxAutoBrightness != previousBrightness) {
+        DEBUG_SERIAL.printf(
+          "[BH1750] lux=%.1f filtered=%.1f base=%d auto=%d\n",
+          lux,
+          luxAutoState.filteredLux,
+          brightness,
+          luxAutoBrightness
+        );
+      }
     }
     lastLuxAutoRead = now;
   }
