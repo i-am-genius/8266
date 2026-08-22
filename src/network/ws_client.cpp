@@ -37,7 +37,13 @@ static LampAimState lampAimState{
   false,
   false,
   false,
+  false,
 };
+static String activeCollisionGuardId = "";
+
+bool isCollisionParkActive() {
+  return lampAimState.collisionParkActive;
+}
 static LampAimSyncGate lampAimSyncGate;
 static bool appliedAimInitialized = false;
 static LampAimSelection lastAppliedAim{
@@ -158,6 +164,21 @@ static void syncSelectedLampAim(const char* reason) {
     return;
   }
   applySelectedLampAim(reason, syncAction == LampAimSyncAction::ForceApply);
+}
+
+static void sendCollisionGuardStatus(const String& guardId, const char* status) {
+  if (!wsConnected) return;
+  StaticJsonDocument<224> doc;
+  doc["type"] = "collisionGuardStatus";
+  doc["chipId"] = deviceId;
+  doc["guardId"] = guardId;
+  doc["status"] = status ? status : "unknown";
+  doc["pan"] = panDeg;
+  doc["tilt"] = tiltDeg;
+  doc["nanoFeedback"] = false;
+  String msg;
+  serializeJson(doc, msg);
+  webSocket.sendTXT(msg);
 }
 
 static void handleGarmentAimState(JsonObject payload) {
@@ -484,6 +505,11 @@ void handleWsMessage(const String& text) {
   }
 
   if (type == "arm_joystick") {
+    if (lampAimState.collisionParkActive) {
+      stopArmJoystickMotion();
+      DEBUG_SERIAL.println("[COLLISION] joystick ignored while parked");
+      return;
+    }
     float x = payload["x"] | 0.0f;
     float y = payload["y"] | 0.0f;
 
@@ -524,6 +550,35 @@ void handleWsMessage(const String& text) {
     return;
   }
 
+  if (type == "lampCollisionGuard") {
+    String action = payload["action"] | "park";
+    String guardId = payload["guardId"] | "";
+    action.trim();
+    guardId.trim();
+    if (guardId.length() == 0 || guardId.length() > 64) {
+      DEBUG_SERIAL.println("[COLLISION] invalid guardId");
+      return;
+    }
+    if (action == "release") {
+      if (activeCollisionGuardId.length() > 0 && activeCollisionGuardId != guardId) {
+        DEBUG_SERIAL.println("[COLLISION] stale release ignored");
+        return;
+      }
+      lampAimState.collisionParkActive = false;
+      activeCollisionGuardId = "";
+      applySelectedLampAim("collision_release", true);
+      sendCollisionGuardStatus(guardId, "released");
+      return;
+    }
+
+    activeCollisionGuardId = guardId;
+    lampAimState.collisionParkActive = true;
+    applySelectedLampAim("collision_park", true);
+    // accepted means ESP8266 forwarded pan=0/tilt=0. Nano cannot report arrival.
+    sendCollisionGuardStatus(guardId, "accepted");
+    return;
+  }
+
   if (type == "arm_position") {
     bool changed = false;
     String source = payload["source"] | "";
@@ -540,7 +595,7 @@ void handleWsMessage(const String& text) {
 
     stopArmJoystickMotion();
 
-    if (payload.containsKey("pan")) {
+    if (!lampAimState.collisionParkActive && payload.containsKey("pan")) {
       const float requestedPan = payload["pan"].as<float>();
       if (isfinite(requestedPan)) {
         const float appliedPan = clampPanTargetDeg(requestedPan);
@@ -550,7 +605,7 @@ void handleWsMessage(const String& text) {
       }
     }
 
-    if (payload.containsKey("tilt")) {
+    if (!lampAimState.collisionParkActive && payload.containsKey("tilt")) {
       const float requestedTilt = payload["tilt"].as<float>();
       if (isfinite(requestedTilt)) {
         const float appliedTilt = clampTiltTargetDeg(requestedTilt);
@@ -565,8 +620,7 @@ void handleWsMessage(const String& text) {
       sliderMm = constrain(sliderMm, SLIDER_MIN, SLIDER_MAX);
       sendNano(
         'x',
-        String((float)sliderMm, 2),
-        trackedSliderMotion ? captureTaskId : String("")
+        String((float)sliderMm, 2)
       );
       changed = true;
     }
@@ -590,6 +644,7 @@ void handleWsMessage(const String& text) {
     }
 
     applyArmSpeed(speed);
+    sendArmSpeedStatus("ws_command");
     DEBUG_SERIAL.println("[ARM] speed changed: " + speed);
     diagnosticRecordArm(DIAG_SOURCE_WS, "speed", panDeg, tiltDeg, sliderMm);
     return;
@@ -610,6 +665,10 @@ void handleWsMessage(const String& text) {
       return;
     }
 
+    if (lampAimState.collisionParkActive) {
+      DEBUG_SERIAL.println("[COLLISION] manual arm action ignored while parked");
+      return;
+    }
     if (handleArmAction(action)) {
       diagnosticRecordArm(DIAG_SOURCE_WS, action.c_str(), panDeg, tiltDeg, sliderMm);
     }
@@ -677,6 +736,7 @@ void handleWsMessage(const String& text) {
 
   if (type == "registerAck" || type == "register_ack" || type == "register_ok") {
     DEBUG_SERIAL.println("[WS] register ack received");
+    sendArmSpeedStatus("register_ack");
     return;
   }
 
@@ -714,6 +774,20 @@ void sendLampProximityState(bool nearby) {
   serializeJson(doc, msg);
   webSocket.sendTXT(msg);
   DEBUG_SERIAL.println("[WS] lamp proximity state: " + msg);
+}
+
+void sendArmSpeedStatus(const char* reason) {
+  if (!wsConnected) return;
+  StaticJsonDocument<192> doc;
+  doc["type"] = "armSpeedStatus";
+  doc["chipId"] = deviceId;
+  doc["speed"] = currentArmSpeed;
+  doc["reason"] = reason ? reason : "applied";
+  doc["nanoFeedback"] = false;
+  String msg;
+  serializeJson(doc, msg);
+  webSocket.sendTXT(msg);
+  DEBUG_SERIAL.println("[WS] arm speed status: " + msg);
 }
 
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
@@ -756,7 +830,6 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       sendWsRegister();
       sendWsPing();
       sendCurrentLampProximityState();
-      reportPendingNanoSliderArrival();
       if (!bootOnlineReportDone && !bootOnlineReportRequested) {
         bootOnlineReportRequested = true;
         requestDeviceStateReport("WS_CONNECTED");

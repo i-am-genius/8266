@@ -105,6 +105,12 @@ void handleArmJoystick() {
     return;
   }
 
+  if (isCollisionParkActive()) {
+    stopArmJoystickMotion();
+    server.send(423, "application/json", "{\"error\":\"collision park active\"}");
+    return;
+  }
+
   if (!server.hasArg("plain")) {
     server.send(400, "application/json", "{\"error\":\"缺少 body\"}");
     return;
@@ -167,7 +173,7 @@ void handleArmPosition() {
   const bool hasPan = doc.containsKey("pan");
   const bool hasTilt = doc.containsKey("tilt");
   const bool hasSlider = doc.containsKey("slider");
-  if (isPersonTrackingAimActive() && updatePersonTrackingAim(
+  if (!isCollisionParkActive() && isPersonTrackingAimActive() && updatePersonTrackingAim(
         hasPan,
         hasPan ? doc["pan"].as<float>() : 0.0f,
         hasTilt,
@@ -187,13 +193,13 @@ void handleArmPosition() {
   bool changed = false;
   stopArmJoystickMotion();
 
-  if (doc.containsKey("pan")) {
+  if (!isCollisionParkActive() && doc.containsKey("pan")) {
     panDeg = (int)clampPanTargetDeg(doc["pan"].as<int>());
     sendPanTarget(panDeg);
     changed = true;
   }
 
-  if (doc.containsKey("tilt")) {
+  if (!isCollisionParkActive() && doc.containsKey("tilt")) {
     tiltDeg = (int)clampTiltTargetDeg(doc["tilt"].as<int>());
     sendTiltTarget(tiltDeg);
     changed = true;
@@ -242,6 +248,7 @@ void handleArmSpeed() {
   if (speed.length() == 0) speed = "normal";
 
   applyArmSpeed(speed);
+  sendArmSpeedStatus("local_http");
   diagnosticRecordArm(DIAG_SOURCE_LOCAL, "speed", panDeg, tiltDeg, sliderMm);
 
   DEBUG_SERIAL.println("[HTTP] arm_speed: " + speed);
@@ -254,6 +261,12 @@ void handleArmActionHttp() {
 
   if (server.method() == HTTP_OPTIONS) {
     server.send(204);
+    return;
+  }
+
+  if (isCollisionParkActive()) {
+    stopArmJoystickMotion();
+    server.send(423, "application/json", "{\"error\":\"collision park active\"}");
     return;
   }
 
@@ -328,8 +341,8 @@ void handleLampControl() {
   // 云台角度控制 (绝对角度)
   bool hasPan = !doc["pan"].isNull();
   bool hasTilt = !doc["tilt"].isNull();
-  if (hasPan)  sendPanTarget(doc["pan"].as<float>());
-  if (hasTilt) sendTiltTarget(doc["tilt"].as<float>());
+  if (!isCollisionParkActive() && hasPan)  sendPanTarget(doc["pan"].as<float>());
+  if (!isCollisionParkActive() && hasTilt) sendTiltTarget(doc["tilt"].as<float>());
   if (hasPan || hasTilt) {
     int loggedPan = hasPan ? (int)round(doc["pan"].as<float>()) : panDeg;
     int loggedTilt = hasTilt ? (int)round(doc["tilt"].as<float>()) : tiltDeg;
