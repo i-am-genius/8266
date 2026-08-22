@@ -470,20 +470,21 @@ void applyArmSpeed(const String& speed) {
     sliderStep = 20;
     panSpeedDeg = 20;
     tiltSpeedDeg = 30;
-    sliderSpeedMm = 80;
+    sliderSpeedMm = 120;
   } else if (normalized == "fast") {
     angleStep = 12;
     sliderStep = 45;
     panSpeedDeg = 45;
     tiltSpeedDeg = 65;
-    sliderSpeedMm = 180;
+    sliderSpeedMm = 270;
   } else {
     // normal (原 fast 档)
+    normalized = "normal";
     angleStep = 8;
     sliderStep = 30;
     panSpeedDeg = 30;
     tiltSpeedDeg = 45;
-    sliderSpeedMm = 120;
+    sliderSpeedMm = 180;
   }
 
   currentArmSpeed = normalized;

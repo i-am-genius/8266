@@ -17,6 +17,10 @@ LampAimSyncAction LampAimSyncGate::onState(bool garmentTrackingEnabled) {
 }
 
 LampAimSelection selectLampAim(const LampAimState& state) {
+  if (state.collisionParkActive) {
+    return LampAimSelection{LampAimSource::CollisionPark, LampAimPose{0.0f, 0.0f}};
+  }
+
   if (state.personTrackingActive) {
     if (state.personTargetValid) {
       return LampAimSelection{LampAimSource::Person, state.person};
@@ -32,6 +36,8 @@ LampAimSelection selectLampAim(const LampAimState& state) {
 
 const char* lampAimSourceName(LampAimSource source) {
   switch (source) {
+    case LampAimSource::CollisionPark:
+      return "collision_park";
     case LampAimSource::Garment:
       return "garment";
     case LampAimSource::DefaultPerson:
