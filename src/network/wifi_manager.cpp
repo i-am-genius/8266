@@ -1,4 +1,5 @@
 #include "network/wifi_manager.h"
+#include "network/wifi_boot_policy.h"
 #include "config/config_manager.h"
 #include "device/arm_controller.h"
 #include "online_logger.h"
@@ -79,14 +80,45 @@ const char* wifiStatusToString(wl_status_t status) {
 
 // ---- WiFi 连接 ----
 
-bool connectWiFi(const String& ssid, const String& password, unsigned long timeoutMs) {
+static bool wifiAttemptActive = false;
+static unsigned long wifiAttemptStartedAt = 0;
+static String wifiAttemptSsid;
+
+static WiFiAttemptStatus toAttemptStatus(wl_status_t status) {
+  switch (status) {
+    case WL_CONNECTED:
+      return WiFiAttemptStatus::Connected;
+    case WL_NO_SSID_AVAIL:
+      return WiFiAttemptStatus::NoSsid;
+    case WL_CONNECT_FAILED:
+      return WiFiAttemptStatus::ConnectFailed;
+    case WL_DISCONNECTED:
+    case WL_CONNECTION_LOST:
+      return WiFiAttemptStatus::Disconnected;
+    default:
+      return WiFiAttemptStatus::Connecting;
+  }
+}
+
+static void beginWiFiAttempt(const String& ssid, const String& password) {
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid.c_str(), password.c_str());
 
   DEBUG_SERIAL.println("\n[WiFi] 正在连接: " + ssid);
-  unsigned long start = millis();
-  unsigned long lastProgressAt = start;
-  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
+  wifiAttemptSsid = ssid;
+  wifiAttemptStartedAt = millis();
+  wifiAttemptActive = true;
+}
+
+static bool waitForWiFiAttempt(unsigned long timeoutMs) {
+  if (!wifiAttemptActive) return false;
+
+  unsigned long lastProgressAt = millis();
+  while (!shouldFinishWiFiAttempt(
+    toAttemptStatus(WiFi.status()),
+    millis() - wifiAttemptStartedAt,
+    timeoutMs
+  )) {
     pollNano();
     handleNanoStartupSync();
     if (millis() - lastProgressAt >= 500) {
@@ -98,24 +130,39 @@ bool connectWiFi(const String& ssid, const String& password, unsigned long timeo
   pollNano();
   handleNanoStartupSync();
   DEBUG_SERIAL.println();
+  wifiAttemptActive = false;
 
   if (WiFi.status() == WL_CONNECTED) {
     DEBUG_SERIAL.println("[WiFi] 连接成功: " + WiFi.localIP().toString());
-    String msg = "连接成功 SSID=" + ssid + " IP=" + WiFi.localIP().toString();
+    String msg = "连接成功 SSID=" + wifiAttemptSsid + " IP=" + WiFi.localIP().toString();
     diagnosticLogWifi(msg.c_str());
     return true;
   }
 
-  DEBUG_SERIAL.println("[WiFi] 连接失败");
-  String msg = "连接失败 SSID=" + ssid;
+  DEBUG_SERIAL.println(
+    "[WiFi] 连接失败: " + String(wifiStatusToString(WiFi.status()))
+  );
+  String msg = "连接失败 SSID=" + wifiAttemptSsid +
+               " status=" + String((int)WiFi.status());
   diagnosticLogWifi(msg.c_str(), true);
   return false;
 }
 
-bool connectSavedWiFi() {
-  if (cfg.ssid.length() == 0) return false;
+bool connectWiFi(const String& ssid, const String& password, unsigned long timeoutMs) {
+  beginWiFiAttempt(ssid, password);
+  return waitForWiFiAttempt(timeoutMs);
+}
 
-  if (connectWiFi(cfg.ssid, cfg.password, wifiConnectTimeout)) {
+bool beginSavedWiFiConnection() {
+  if (cfg.ssid.length() == 0) return false;
+  beginWiFiAttempt(cfg.ssid, cfg.password);
+  return true;
+}
+
+bool finishSavedWiFiConnection() {
+  if (!wifiAttemptActive) return false;
+
+  if (waitForWiFiAttempt(wifiConnectTimeout)) {
     return true;
   }
 
@@ -130,7 +177,18 @@ bool connectSavedWiFi() {
 
   cfg.ssid = DEFAULT_WIFI_SSID;
   cfg.password = DEFAULT_WIFI_PASSWORD;
+  if (!saveConfig(cfg)) {
+    DEBUG_SERIAL.println("[WiFi] 默认网络已连接，但配置持久化失败");
+    diagnosticLogWifi("default network connected; config save failed", true);
+  } else {
+    DEBUG_SERIAL.println("[WiFi] 默认网络已保存，下次启动将直接连接");
+  }
   return true;
+}
+
+bool connectSavedWiFi() {
+  if (!beginSavedWiFiConnection()) return false;
+  return finishSavedWiFiConnection();
 }
 
 // ---- 串行配网 (SmartConfig 优先, AP 后备) ----
@@ -243,15 +301,18 @@ void startParallelProvision() {
   smartConfigStartMs = millis();
 
   if (scOk) {
-    DEBUG_SERIAL.println("[PROV] SmartConfig 已启动 (AirKiss, 无限等待)");
+    DEBUG_SERIAL.println(
+      "[PROV] SmartConfig 已启动 (AirKiss, 最长 " +
+      String(smartConfigTimeout / 1000) + " 秒)"
+    );
     DEBUG_SERIAL.println("[PROV] 等待手机发送 Wi-Fi 凭据...");
     // SmartConfig 等待期间不启动 AP 模式，避免干扰 STA 连接
     ensureProvisionRoutes();
     diagnosticLogWifi("SmartConfig started");
   } else {
-    DEBUG_SERIAL.println("[PROV] SmartConfig 启动失败，3秒后重试...");
-    delay(3000);
-    diagnosticRestart("smartconfig_start_failed");
+    DEBUG_SERIAL.println("[PROV] SmartConfig 启动失败，切换到 AP 配网");
+    diagnosticLogWifi("SmartConfig start failed; starting AP portal", true);
+    startAPPortal();
   }
 }
 
@@ -379,6 +440,13 @@ void handleProvisioningLoop() {
           delay(3000);
           diagnosticRestart("smartconfig_connect_failed");
         }
+        return;
+      }
+
+      if (millis() - smartConfigStartMs >= smartConfigTimeout) {
+        DEBUG_SERIAL.println("[PROV] SmartConfig 超时，切换到 AP 配网");
+        diagnosticLogWifi("SmartConfig timeout; starting AP portal", true);
+        startAPPortal();
         return;
       }
 
