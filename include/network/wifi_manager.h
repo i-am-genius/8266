@@ -3,6 +3,8 @@
 
 bool connectWiFi(const String& ssid, const String& password, unsigned long timeoutMs);
 bool connectSavedWiFi();
+bool beginSavedWiFiConnection();
+bool finishSavedWiFiConnection();
 void startParallelProvision();
 void startAPPortal();
 void handleProvisioningLoop();

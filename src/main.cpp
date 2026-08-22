@@ -130,8 +130,6 @@ void setup() {
     LOG_INFO("BOOT", "LittleFS 挂载成功");
   }
 
-  setupHardwareAndSensors();
-
   bool hasConfig = loadConfig();
   bool wifiOk = false;
 
@@ -143,12 +141,20 @@ void setup() {
   diagnosticInit();
 
   if (hasConfig) {
-    DEBUG_SERIAL.println("[BOOT] Saved config found, trying to connect...");
+    DEBUG_SERIAL.println("[BOOT] Saved config found, starting WiFi early...");
     LOG_INFO("BOOT", "尝试连接已保存的 WiFi");
-    wifiOk = connectSavedWiFi();
+    beginSavedWiFiConnection();
   } else {
     DEBUG_SERIAL.println("[BOOT] No saved config, entering parallel provisioning...");
     LOG_INFO("BOOT", "无已保存配置，进入配网模式");
+  }
+
+  // WiFi association and DHCP continue in the background while I2C sensors
+  // initialize, shortening the perceived boot-to-online time.
+  setupHardwareAndSensors();
+
+  if (hasConfig) {
+    wifiOk = finishSavedWiFiConnection();
   }
 
   if (!wifiOk) {
