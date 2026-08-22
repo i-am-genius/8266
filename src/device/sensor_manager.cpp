@@ -9,12 +9,12 @@
 static ThresholdGate tofReadGate{};
 static ThresholdGate bh1750ReadGate{};
 static const uint8_t BH1750_I2C_ADDRESS = 0x23;
-static const unsigned long BH1750_CONTROL_INTERVAL_MS = 250;
+static const unsigned long BH1750_CONTROL_INTERVAL_MS = 150;
 static const LuxAutoConfig luxAutoConfig{
   0.35f,  // EMA alpha: react quickly while filtering short spikes
   20.0f,  // target deadband in lux
   75.0f,  // lux error represented by one brightness step
-  2,      // maximum brightness change per sample
+  1,      // maximum brightness change per sample
   15,     // BH1750 may only trim the configured base by +/-15
   5,
   100,

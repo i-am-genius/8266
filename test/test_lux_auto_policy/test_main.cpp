@@ -9,7 +9,7 @@ static LuxAutoConfig config() {
     0.35f,
     20.0f,
     75.0f,
-    2,
+    1,
     15,
     5,
     100,
@@ -25,7 +25,7 @@ void test_first_sample_starts_from_configured_base_not_stale_auto_value() {
   state = updateLuxAutoControl(state, 0.0f, 300, 80, config());
 
   TEST_ASSERT_TRUE(state.initialized);
-  TEST_ASSERT_EQUAL_INT(82, state.brightness);
+  TEST_ASSERT_EQUAL_INT(81, state.brightness);
 }
 
 void test_low_lux_cannot_raise_brightness_more_than_15_from_base() {
@@ -63,7 +63,7 @@ void test_filter_reduces_one_sample_spike() {
   state = updateLuxAutoControl(state, 700.0f, 300, 80, config());
 
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 440.0f, state.filteredLux);
-  TEST_ASSERT_EQUAL_INT(78, state.brightness);
+  TEST_ASSERT_EQUAL_INT(79, state.brightness);
 }
 
 void test_invalid_sample_preserves_previous_state() {
