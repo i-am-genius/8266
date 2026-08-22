@@ -29,15 +29,16 @@
 
 // ===================== 鍥轰欢淇℃伅 =====================
 #define FW_DEVICE_TYPE  "lamp"
-#define FW_VERSION      "1.0.7"
-#define FW_VERSION_CODE 10007
+#define FW_VERSION      "1.0.8"
+#define FW_VERSION_CODE 10008
 #define FW_CHANNEL      "stable"
 
 // ===================== 鍛藉悕甯搁噺 =====================
 const float   WAVE_FREQ_FACTOR          = 0.32f;
 const float   TOF_TRANSITION_MS         = 2000.0f;
 const uint16_t TOF_MAX_RANGE_MM         = 8200;
-const unsigned long TOF_DEBOUNCE_MS     = 1000;
+const unsigned long TOF_APPROACH_DEBOUNCE_MS = 500;
+const unsigned long TOF_LEAVE_DEBOUNCE_MS    = 1000;
 const unsigned long TOF_READ_INTERVAL_MS = 50;
 const char* const AP_DEFAULT_PASSWORD   = "12345678";
 const char* const WS_PATH               = "/ws/device";

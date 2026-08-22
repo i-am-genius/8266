@@ -11,8 +11,42 @@ static LampAimState makeState() {
     LampAimPose{5.0f, 25.0f},
     LampAimPose{-25.0f, -10.0f},
     LampAimPose{3.0f, -28.0f},
-    true, true, false, false,
+    true, true, false, false, false,
   };
+}
+
+void test_collision_park_overrides_every_tracking_source_and_uses_zero_pose() {
+  LampAimState state = makeState();
+  state.personTrackingActive = true;
+  state.personTargetValid = true;
+  state.collisionParkActive = true;
+
+  LampAimSelection selected = selectLampAim(state);
+
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(LampAimSource::CollisionPark),
+    static_cast<int>(selected.source)
+  );
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, selected.pose.panDeg);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, selected.pose.tiltDeg);
+}
+
+void test_releasing_collision_park_restores_latest_logical_target() {
+  LampAimState state = makeState();
+  state.collisionParkActive = true;
+  state.personTrackingActive = true;
+  state.personTargetValid = true;
+  state.person = LampAimPose{-31.0f, -14.0f};
+
+  state.collisionParkActive = false;
+  LampAimSelection selected = selectLampAim(state);
+
+  TEST_ASSERT_EQUAL_INT(
+    static_cast<int>(LampAimSource::Person),
+    static_cast<int>(selected.source)
+  );
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, -31.0f, selected.pose.panDeg);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, -14.0f, selected.pose.tiltDeg);
 }
 
 void test_garment_runtime_pose_temporarily_overrides_configured_default() {
@@ -123,6 +157,8 @@ int main(int, char**) {
   RUN_TEST(test_configured_garment_default_is_used_without_valid_target);
   RUN_TEST(test_person_tracking_has_priority_and_starts_from_configured_default);
   RUN_TEST(test_stopping_person_tracking_restores_runtime_garment_without_changing_defaults);
+  RUN_TEST(test_collision_park_overrides_every_tracking_source_and_uses_zero_pose);
+  RUN_TEST(test_releasing_collision_park_restores_latest_logical_target);
   RUN_TEST(test_same_selection_compares_only_pan_and_tilt);
   RUN_TEST(test_first_aim_state_is_cached_without_motion);
   RUN_TEST(test_repeated_aim_state_only_applies_when_pose_changed);

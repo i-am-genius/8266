@@ -4,6 +4,7 @@ constexpr float LAMP_DEFAULT_PERSON_PAN_DEG = 0.0f;
 constexpr float LAMP_DEFAULT_PERSON_TILT_DEG = -30.0f;
 
 enum class LampAimSource {
+  CollisionPark,
   DefaultGarment,
   Garment,
   DefaultPerson,
@@ -26,6 +27,7 @@ struct LampAimState {
   bool garmentTargetValid;
   bool personTrackingActive;
   bool personTargetValid;
+  bool collisionParkActive;
 };
 
 struct LampAimSelection {
