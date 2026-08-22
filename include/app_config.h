@@ -56,9 +56,10 @@ const float GARMENT_AIM_VERTICAL_FOV_DEG   = 45.0f;
 const char* const DEFAULT_SERVER_HOST = "device.genius.show";
 const uint16_t DEFAULT_HTTP_PORT = 80;
 const uint16_t DEFAULT_WS_PORT   = 80;
-const char* const DEFAULT_WIFI_SSID = "somebody的iPhone";
-const char* const DEFAULT_WIFI_PASSWORD = "20040000";
-
+// const char* const DEFAULT_WIFI_SSID = "somebody的iPhone";
+// const char* const DEFAULT_WIFI_PASSWORD = "20040000";
+const char* const DEFAULT_WIFI_SSID = "NaHS";
+const char* const DEFAULT_WIFI_PASSWORD = "123456789";
 // ===================== 瀹氭椂鍙傛暟 =====================
 const unsigned long lightSendInterval    = 30000;
 const unsigned long lightUpdateInterval  = 50;
