@@ -301,18 +301,15 @@ void startParallelProvision() {
   smartConfigStartMs = millis();
 
   if (scOk) {
-    DEBUG_SERIAL.println(
-      "[PROV] SmartConfig 已启动 (AirKiss, 最长 " +
-      String(smartConfigTimeout / 1000) + " 秒)"
-    );
+    DEBUG_SERIAL.println("[PROV] SmartConfig 已启动 (AirKiss, 无限等待)");
     DEBUG_SERIAL.println("[PROV] 等待手机发送 Wi-Fi 凭据...");
     // SmartConfig 等待期间不启动 AP 模式，避免干扰 STA 连接
     ensureProvisionRoutes();
     diagnosticLogWifi("SmartConfig started");
   } else {
-    DEBUG_SERIAL.println("[PROV] SmartConfig 启动失败，切换到 AP 配网");
-    diagnosticLogWifi("SmartConfig start failed; starting AP portal", true);
-    startAPPortal();
+    DEBUG_SERIAL.println("[PROV] SmartConfig 启动失败，3秒后重试...");
+    delay(3000);
+    diagnosticRestart("smartconfig_start_failed");
   }
 }
 
@@ -440,13 +437,6 @@ void handleProvisioningLoop() {
           delay(3000);
           diagnosticRestart("smartconfig_connect_failed");
         }
-        return;
-      }
-
-      if (millis() - smartConfigStartMs >= smartConfigTimeout) {
-        DEBUG_SERIAL.println("[PROV] SmartConfig 超时，切换到 AP 配网");
-        diagnosticLogWifi("SmartConfig timeout; starting AP portal", true);
-        startAPPortal();
         return;
       }
 
