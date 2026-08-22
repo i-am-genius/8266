@@ -20,7 +20,7 @@ static const LuxAutoConfig luxAutoConfig{
   100,
 };
 static LuxAutoState luxAutoState{0.0f, 50, false};
-static const uint16_t TOF_PERSON_NEAR_THRESHOLD_MM = 2000;
+static const uint16_t TOF_PERSON_NEAR_THRESHOLD_MM = 1500;
 static const unsigned long TOF_PROXIMITY_EXIT_CONFIRM_MS = 500;
 static const uint16_t TOF_CLOTH_TAKEN_THRESHOLD_MM = 600;
 static const unsigned long TOF_CLOTH_CONFIRM_MS = 500;
@@ -216,7 +216,7 @@ void updateLightingByToF() {
     if (currentNearby && !wasNearby) {
       if (detectedStart == 0) {
         detectedStart = now;
-      } else if (now - detectedStart >= TOF_DEBOUNCE_MS) {
+      } else if (now - detectedStart >= TOF_APPROACH_DEBOUNCE_MS) {
         transitionStart = now;
         wasNearby = true;
         leftStart = 0;
@@ -224,7 +224,7 @@ void updateLightingByToF() {
     } else if (!currentNearby && wasNearby) {
       if (leftStart == 0) {
         leftStart = now;
-      } else if (now - leftStart >= TOF_DEBOUNCE_MS) {
+      } else if (now - leftStart >= TOF_LEAVE_DEBOUNCE_MS) {
         transitionStart = now;
         wasNearby = false;
         unsigned long stayDurationSeconds = (now - detectedStart) / 1000;

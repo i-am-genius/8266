@@ -37,7 +37,8 @@
 const float   WAVE_FREQ_FACTOR          = 0.32f;
 const float   TOF_TRANSITION_MS         = 2000.0f;
 const uint16_t TOF_MAX_RANGE_MM         = 8200;
-const unsigned long TOF_DEBOUNCE_MS     = 1000;
+const unsigned long TOF_APPROACH_DEBOUNCE_MS = 500;
+const unsigned long TOF_LEAVE_DEBOUNCE_MS    = 1000;
 const unsigned long TOF_READ_INTERVAL_MS = 50;
 const char* const AP_DEFAULT_PASSWORD   = "12345678";
 const char* const WS_PATH               = "/ws/device";
