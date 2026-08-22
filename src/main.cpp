@@ -3,6 +3,7 @@
 #include "network/wifi_manager.h"
 #include "network/http_reporter.h"
 #include "network/ws_client.h"
+#include "network/tracking_receiver.h"
 #include "network/capture_lighting_ws.h"
 #include "device/light_control.h"
 #include "device/sensor_manager.h"
@@ -187,6 +188,8 @@ void loop() {
     webSocket.loop();
     handleWsHeartbeat();
   }
+
+  handleTrackingUdp();
 
   if (otaInProgress) return;
 

@@ -35,6 +35,7 @@ void pollNano();
 void reportPendingNanoSliderArrival();
 void sendPanTarget(float valueDeg);
 void sendTiltTarget(float valueDeg);
+void sendPersonTrackingPoseNoWait(float panDegValue, float tiltDegValue);
 void sendPanSpeed(float valueDegPerSec);
 void sendTiltSpeed(float valueDegPerSec);
 void sendNanoBootFinish(float garmentPan, float garmentTilt);
