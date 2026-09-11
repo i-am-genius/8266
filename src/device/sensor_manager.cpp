@@ -88,8 +88,10 @@ static bool i2cDeviceResponds(uint8_t address) {
 }
 
 void setupHardwareAndSensors() {
-  pinMode(LED_COLD_PIN, OUTPUT);
-  pinMode(LED_WARM_PIN, OUTPUT);
+  pinMode(LED_COLD_PIN, OUTPUT_OPEN_DRAIN);
+  pinMode(LED_WARM_PIN, OUTPUT_OPEN_DRAIN);
+  digitalWrite(LED_COLD_PIN, HIGH);
+  digitalWrite(LED_WARM_PIN, HIGH);
   pinMode(BLUR, OUTPUT);
   digitalWrite(BLUR, LOW);
   analogWriteRange(1024);

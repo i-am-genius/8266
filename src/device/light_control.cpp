@@ -36,8 +36,8 @@ void applyLightSettings(int br, int tp) {
   int pwmCold = (long)tempVal * briVal / 1024;
   int pwmWarm = (long)(1024 - tempVal) * briVal / 1024;
 
-  analogWrite(LED_COLD_PIN, 1024 - pwmCold);
-  analogWrite(LED_WARM_PIN, 1024 - pwmWarm);
+  analogWriteMode(LED_COLD_PIN, 1024 - pwmCold, true);
+  analogWriteMode(LED_WARM_PIN, 1024 - pwmWarm, true);
 }
 
 void startCaptureLightingOverride(int br, int tp, unsigned long ttlMs) {
